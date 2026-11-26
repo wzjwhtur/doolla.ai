@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
+	"doolla.ai/sdk/web_components"
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
-	"doolla.ai/sdk/web_components"
 )
 
 type UserResolver func(http.ResponseWriter, *http.Request) (User, error)
@@ -95,7 +95,23 @@ func NewServerWithOptions(agent *Agent, resolve UserResolver, options ServerOpti
 	mux.HandleFunc("GET /assets/doolla-components.js", webui.Serve)
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>doolla.ai</title><script type="module" src="/assets/doolla-components.js"></script><style>html,body{height:100%;margin:0}doolla-chat{display:block;height:100%}</style><doolla-chat></doolla-chat></html>`)
+		fmt.Fprint(w, `<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>doolla.ai</title>
+<script type="module" src="/assets/doolla-components.js"></script>
+<style>
+  body { margin: 0; padding: 32px 24px; background: #f2f4f7; }
+  doolla-chat { --doolla-chat-height: calc(100dvh - 66px); }
+  doolla-chat:not(:defined) { display: block; }
+  @media (max-width: 760px) {
+    body { padding: 0; }
+    doolla-chat { --doolla-chat-height: calc(100dvh - 2px); }
+  }
+</style>
+<doolla-chat></doolla-chat>
+</html>`)
 	})
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"status": "healthy", "service": "doolla"})

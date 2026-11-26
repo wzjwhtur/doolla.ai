@@ -417,6 +417,7 @@ func (a *Agent) Chat(ctx context.Context, user User, id, question string, emit f
 			c := status("working", reply.Content)
 			if slices.Contains(turn.UIFeatures, "tool_invocation_message_in_chat") {
 				c = textComponent(reply.Content)
+				c.Data["chat_section"] = "activity"
 			}
 			if err := emit(c); err != nil {
 				return err
@@ -514,15 +515,37 @@ func (a *Agent) executeCall(ctx context.Context, turn Turn, call ToolCall, emit 
 			return ToolResult{}, nil, err
 		}
 	}
-	if !a.config.HideProgress && slices.Contains(turn.UIFeatures, "tool_arguments") {
+	var showSQL bool
+	switch tool.Tool.(type) {
+	case SQLTool, *SQLTool:
+		showSQL = !a.config.HideProgress && slices.Contains(turn.UIFeatures, "sql_query")
+	}
+	if !showSQL && !a.config.HideProgress && slices.Contains(turn.UIFeatures, "tool_arguments") {
 		var args map[string]any
 		if json.Unmarshal([]byte(call.Function.Arguments), &args) == nil {
-			if err := emit(Component{Type: "status_card", Data: map[string]any{"title": "Executing " + call.Function.Name, "status": "running", "metadata": args}}); err != nil {
+			if err := emit(Component{Type: "status_card", Data: map[string]any{
+				"title": "Executing " + call.Function.Name, "status": "running", "metadata": args,
+				"chat_section": "activity",
+			}}); err != nil {
 				return ToolResult{}, nil, err
 			}
 		}
 	}
-	result, err := a.runTool(ctx, turn, tool, call)
+	var result ToolResult
+	args, err := a.prepareTool(ctx, turn, tool, call)
+	if err == nil {
+		if showSQL {
+			if query, _ := sqlStatement(args); query != "" {
+				// Publish the statement passed to the SQL tool after argument transforms and hooks.
+				if err := emit(Component{Type: "sql_statement", Data: map[string]any{
+					"title": "生成的 SQL", "content": query, "code_language": "sql", "chat_section": "activity",
+				}}); err != nil {
+					return ToolResult{}, nil, err
+				}
+			}
+		}
+		result, err = a.runTool(ctx, turn, tool.Tool, call, args)
+	}
 	evidence.record(call, result, err)
 	if err != nil {
 		result = failedToolResult(err)

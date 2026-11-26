@@ -81,6 +81,9 @@ async function testFinalAnswerMarkdown() {
   try {
     await chat.updateComplete;
     check(await chat.sendMessage('显示生产日报'), 'final answer SSE response');
+    const tracker = chat.getProgressTracker()!;
+    await tracker.updateComplete;
+    check(getComputedStyle(tracker).display === 'none', 'a response without tool activity has no empty thought panel');
     const answer = chat.shadowRoot!.querySelector('[data-component-id="scalar"]');
     const reportNode = chat.shadowRoot!.querySelector('[data-component-id="report"]');
     const plainNode = chat.shadowRoot!.querySelector('[data-component-id="plain"]');
@@ -191,10 +194,78 @@ async function testTaskTracker() {
   host.remove();
 }
 
+async function testAssistantReplies() {
+  const streams = new Map<string, ReadableStreamDefaultController<Uint8Array>>();
+  const encoder = new TextEncoder();
+  window.fetch = async (_url, init) => {
+    const { message, metadata } = JSON.parse(String(init?.body));
+    if (metadata?.starter_ui_request) return new Response('data: [DONE]\n\n');
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) { streams.set(message, controller); },
+    }));
+  };
+
+  const chat = new DoollaChat();
+  document.body.append(chat);
+  try {
+    await chat.updateComplete;
+    const first = chat.sendMessage('first question');
+    const second = chat.sendMessage('second question');
+    const openStreams = ['first question', 'second question'].map(question => streams.get(question)!);
+    const send = (turn: number, type: string, id: string, data: Record<string, unknown>) => {
+      const chunk = { rich: { type, id, lifecycle: 'create', data } };
+      openStreams[turn].enqueue(encoder.encode('data: ' + JSON.stringify(chunk) + '\n\n'));
+    };
+    const task = (turn: number, data: Record<string, unknown>) =>
+      send(turn, 'task_tracker_update', 'doolla-task-tracker', data);
+    task(0, { operation: 'add_task', task: { id: 'run', title: 'first SQL', status: 'in_progress' } });
+    task(1, { operation: 'add_task', task: { id: 'run', title: 'second SQL', status: 'in_progress' } });
+    send(1, 'text', 'step', { content: 'checking schema', chat_section: 'activity' });
+    task(1, { operation: 'update_task', task_id: 'run', status: 'error' });
+    send(1, 'text', 'second-answer', { content: 'second answer' });
+    const query = "SELECT '<span data-sql-html>' AS sample";
+    send(0, 'sql_statement', 'sql-activity', { title: '生成的 SQL', content: query, code_language: 'sql', chat_section: 'activity' });
+    send(0, 'dataframe', 'query-rows', { title: 'Query Results', columns: ['sample'], data: [{ sample: 'value' }], chat_section: 'activity' });
+    task(0, { operation: 'update_task', task_id: 'run', status: 'completed' });
+    send(0, 'text', 'first-answer', { content: 'first answer' });
+    for (const stream of openStreams) {
+      stream.enqueue(encoder.encode('data: [DONE]\n\n'));
+      stream.close();
+    }
+    check(await first && await second, 'both requests finish');
+
+    const replies = Array.from(chat.shadowRoot!.querySelectorAll('.assistant-reply'));
+    const trackers = replies.map(row => row.querySelector<DoollaProgressTracker>('doolla-progress-tracker')!);
+    await Promise.all(trackers.map(tracker => tracker.updateComplete));
+    check(replies.length === 2 && replies.every(row => row.querySelector('.assistant-name')?.textContent === 'Doolla AI'),
+      'assistant identity is visible in each reply');
+    check(replies[0].querySelector('.assistant-content')?.textContent === 'first answer' &&
+      replies[1].querySelector('.assistant-content')?.textContent === 'second answer',
+      'out-of-order responses stay with their own request');
+    check(replies[1].querySelector('doolla-progress-tracker [data-component-id="step"]'),
+      'intermediate rich content goes inside the thought panel');
+    check(trackers[0].querySelector('.text-code > code.language-sql')?.textContent === query &&
+      !trackers[0].querySelector('[data-sql-html]'), 'generated SQL renders as literal code inside the thought panel');
+    check(trackers[0].querySelector('.rich-dataframe tbody td')?.textContent === 'value' &&
+      !replies[0].querySelector('.assistant-content .rich-dataframe'), 'query results render inside the thought panel');
+    const details = trackers.map(tracker => tracker.shadowRoot!.querySelector('details')!);
+    check(details.every(detail => !detail.open), 'thought panels are collapsed by default');
+    check(details[0].querySelector('.progress-item.completed')?.textContent?.includes('first SQL') &&
+      details[1].querySelector('.progress-item.error')?.textContent?.includes('second SQL'),
+      'each thought panel keeps its own tool state');
+    check(details[1].querySelector('summary')?.textContent?.includes('1 个步骤失败'),
+      'failed steps are visible in the collapsed summary');
+    details[1].querySelector('summary')!.click();
+    check(details[1].open && !details[0].open, 'opening one thought panel leaves other replies closed');
+  } finally {
+    chat.remove();
+  }
+}
+
 (async () => {
   try {
     await testSse(); await testWebSocket(); testDataframe(); testToolErrorNotification(); await testTaskTracker();
-    await testFinalAnswerMarkdown();
+    await testFinalAnswerMarkdown(); await testAssistantReplies();
     document.body.dataset.testResult = 'passed';
   } catch (error) {
     document.body.textContent = String(error);

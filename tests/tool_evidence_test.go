@@ -2,6 +2,8 @@ package tests
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -79,6 +81,83 @@ func TestSQLReceiptIsCurrentTurnOnly(t *testing.T) {
 				if err != nil || !strings.Contains(text.String(), want) || strings.Contains(text.String(), "9999") || (i == 1 && strings.Contains(text.String(), "数据库返回 0")) {
 					t.Fatalf("turn %d: %v %s", i, err, text.String())
 				}
+			}
+		})
+	}
+}
+
+type queryActivityRunner struct {
+	query string
+	err   error
+}
+
+func (r *queryActivityRunner) RunSQL(_ context.Context, _ doolla.User, query string) (doolla.SQLResult, error) {
+	r.query = query
+	return doolla.SQLResult{Columns: []string{"total"}, Rows: []map[string]any{{"total": 8}}}, r.err
+}
+
+func TestSQLActivityShowsPreparedStatementAndResult(t *testing.T) {
+	const prepared = "SELECT COUNT(*) AS total FROM authorized_orders"
+	for _, tc := range []struct {
+		name        string
+		groups      []string
+		rejected    bool
+		offline     bool
+		wantSQL     bool
+		wantResults bool
+	}{
+		{name: "allowed", groups: []string{"user"}, wantSQL: true, wantResults: true},
+		{name: "restricted", groups: []string{"admin"}, wantResults: true},
+		{name: "database error", groups: []string{"user"}, offline: true, wantSQL: true},
+		{name: "blocked before execution", groups: []string{"user"}, rejected: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &queryActivityRunner{}
+			if tc.offline {
+				runner.err = errors.New("database unavailable")
+			}
+			calls := 0
+			model := testModel(func(context.Context, []doolla.Message, []doolla.ToolSpec) (doolla.Message, error) {
+				calls++
+				if calls == 1 {
+					return doolla.Message{ToolCalls: []doolla.ToolCall{{ID: "sql", Function: doolla.FunctionCall{
+						Name: "run_sql", Arguments: `{"sql":"SELECT COUNT(*) AS total FROM raw_orders"}`,
+					}}}}, nil
+				}
+				return doolla.Message{Content: "查询已结束。"}, nil
+			})
+			config := doolla.AgentConfig{
+				UIFeatures: map[string][]string{"sql_query": tc.groups},
+				Hooks: []doolla.Hooks{{BeforeTool: func(context.Context, doolla.Turn, doolla.Tool, json.RawMessage) (json.RawMessage, error) {
+					if tc.rejected {
+						return nil, errors.New("statement denied")
+					}
+					return json.Marshal(map[string]string{"sql": prepared})
+				}}},
+			}
+			tool := &doolla.SQLTool{Runner: runner, DisableArtifacts: true}
+			agent, err := doolla.NewConfiguredAgent(model, config, doolla.Registration{Tool: tool})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var statement, result bool
+			err = agent.Chat(t.Context(), doolla.User{ID: "viewer", Groups: []string{"user"}}, "sql-activity", "查询工单数量", func(c doolla.Component) error {
+				switch c.Type {
+				case "sql_statement":
+					statement = true
+					if c.Data["content"] != prepared || c.Data["chat_section"] != "activity" || runner.query != "" {
+						t.Fatalf("statement must be published before execution with prepared SQL: %+v", c.Data)
+					}
+				case "dataframe":
+					result = true
+					if c.Data["chat_section"] != "activity" || runner.query != prepared {
+						t.Fatalf("unexpected query result: %+v", c.Data)
+					}
+				}
+				return nil
+			})
+			if err != nil || statement != tc.wantSQL || result != tc.wantResults || (runner.query == "") != tc.rejected {
+				t.Fatalf("SQL shown=%t, result shown=%t, executed=%t, error=%v", statement, result, runner.query != "", err)
 			}
 		})
 	}

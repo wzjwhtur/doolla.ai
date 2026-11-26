@@ -1,8 +1,8 @@
-import { LitElement, html, css } from 'lit';
+import { LitElement, html, css, render } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { doollaDesignTokens } from '../styles/doolla-design-tokens.js';
-import { DoollaApiClient, ChatStreamChunk } from '../services/api-client.js';
-import { ComponentManager, RichComponent } from './rich-component-system.js';
+import { DoollaApiClient, ChatRequest, ChatStreamChunk } from '../services/api-client.js';
+import { ComponentManager, ComponentUpdate, RichComponent } from './rich-component-system.js';
 import './doolla-status-bar.js';
 import './doolla-progress-tracker.js';
 import type { DoollaProgressTracker } from './doolla-progress-tracker';
@@ -11,698 +11,499 @@ import './rich-task-list.js';
 import './rich-progress-bar.js';
 import './plotly-chart.js';
 
+interface AssistantReply {
+  content: HTMLElement;
+  tracker: DoollaProgressTracker;
+}
+
 @customElement('doolla-chat')
 export class DoollaChat extends LitElement {
   static styles = [
     doollaDesignTokens,
     css`
+      :host {
+        /* Shared with messages, query activity, and rich results inside the chat. */
+        --chat-primary: #1677ff;
+        --chat-primary-hover: #0958d9;
+        --chat-accent-soft: #e6f4ff;
+        --chat-accent-border: #bae0ff;
+        --chat-accent-text: #0958d9;
+        --chat-error-text: #a8071a;
+        --chat-surface: #fff;
+        --chat-muted: #f5f7fa;
+        --chat-text: #1f1f1f;
+        --chat-text-muted: #595959;
+        --chat-outline: #e5e7eb;
+        --chat-control-outline: #d9d9d9;
+        --chat-focus-ring: 0 0 0 3px rgb(22 119 255 / 16%);
+        --chat-gutter: var(--doolla-space-6);
+        --chat-content-width: 860px;
+
+        --doolla-background-root: var(--chat-surface);
+        --doolla-background-default: var(--chat-surface);
+        --doolla-background-higher: var(--chat-muted);
+        --doolla-background-highest: var(--chat-muted);
+        --doolla-background-subtle: var(--chat-muted);
+        --doolla-foreground-default: var(--chat-text);
+        --doolla-foreground-dimmer: var(--chat-text-muted);
+        --doolla-foreground-dimmest: var(--chat-text-muted);
+        --doolla-outline-default: var(--chat-outline);
+        --doolla-outline-dimmer: var(--chat-outline);
+        --doolla-outline-hover: var(--chat-primary);
+        --doolla-accent-primary-default: var(--chat-primary);
+        --doolla-accent-primary-hover: var(--chat-primary-hover);
+        --doolla-accent-primary-subtle: var(--chat-accent-soft);
+        --doolla-border-radius-md: 8px;
+        --doolla-border-radius-lg: 8px;
+        --doolla-shadow-sm: none;
+        --doolla-shadow-md: none;
+
+        display: block;
+        max-width: 1120px;
+        margin: 0 auto;
+        overflow: hidden;
+        background: var(--chat-surface);
+        border: 1px solid var(--chat-outline);
+        border-radius: 12px;
+        box-shadow: 0 6px 24px rgb(31 35 41 / 7%);
+        color: var(--chat-text);
+        font: 14px/1.57 var(--doolla-font-family-default);
+      }
+
+      :host([theme="dark"]) {
+        color-scheme: dark;
+        --chat-primary: #1668dc;
+        --chat-primary-hover: #0958d9;
+        --chat-accent-soft: #142842;
+        --chat-accent-border: #15395b;
+        --chat-accent-text: #91caff;
+        --chat-error-text: #ffccc7;
+        --chat-surface: #141414;
+        --chat-muted: #1f1f1f;
+        --chat-text: #f5f5f5;
+        --chat-text-muted: #bfbfbf;
+        --chat-outline: #303030;
+        --chat-control-outline: #434343;
+      }
+
       *, *::before, *::after {
         box-sizing: border-box;
       }
 
-      :host {
-        display: block;
-        font-family: var(--doolla-font-family-default);
-        --chat-primary: var(--doolla-accent-primary-default);
-        --chat-primary-stronger: var(--doolla-accent-primary-stronger);
-        --chat-primary-foreground: rgb(255, 255, 255);
-        --chat-accent-soft: var(--doolla-accent-primary-subtle);
-        --chat-outline: var(--doolla-outline-default);
-        --chat-surface: var(--doolla-background-root);
-        --chat-muted: var(--doolla-background-default);
-        --chat-muted-stronger: var(--doolla-background-higher);
-        max-width: 1024px;
-        margin: 0 auto;
-        background: var(--doolla-background-root);
-        border: 1px solid var(--doolla-outline-dimmer);
-        border-radius: var(--doolla-border-radius-2xl);
-        box-shadow: var(--doolla-shadow-xl);
-        overflow: hidden;
-        transition: box-shadow var(--doolla-duration-300) ease, transform var(--doolla-duration-300) ease;
-        position: relative;
-      }
-
-      :host(:hover) {
-        box-shadow: var(--doolla-shadow-2xl);
-        transform: translateY(-2px);
-      }
-
-      :host([theme="dark"]) {
-        --chat-primary: var(--doolla-accent-primary-default);
-        --chat-primary-stronger: var(--doolla-accent-primary-stronger);
-        --chat-primary-foreground: rgb(255, 255, 255);
-        --chat-accent-soft: var(--doolla-accent-primary-subtle);
-        --chat-outline: var(--doolla-outline-default);
-        --chat-surface: var(--doolla-background-higher);
-        --chat-muted: var(--doolla-background-default);
-        --chat-muted-stronger: var(--doolla-background-highest);
-        background: var(--doolla-background-higher);
-        border-color: var(--doolla-outline-default);
-      }
-
       :host(.maximized) {
         position: fixed;
-        top: var(--doolla-space-6);
-        left: var(--doolla-space-6);
-        right: var(--doolla-space-6);
-        bottom: var(--doolla-space-6);
+        inset: var(--doolla-space-6);
         max-width: none;
-        width: auto;
         margin: 0;
         z-index: var(--doolla-z-modal);
-        border-radius: var(--doolla-border-radius-xl);
-        transform: none;
-        box-shadow: var(--doolla-shadow-2xl);
-      }
-
-      :host(.maximized):hover {
-        transform: none;
       }
 
       :host(.minimized) {
-        position: fixed !important;
-        bottom: var(--doolla-space-6) !important;
-        right: var(--doolla-space-6) !important;
-        width: 64px !important;
-        height: 64px !important;
-        max-width: none !important;
-        margin: 0 !important;
-        z-index: var(--doolla-z-modal) !important;
-        border-radius: var(--doolla-border-radius-full) !important;
-        cursor: pointer !important;
-        background: linear-gradient(135deg, var(--chat-primary-stronger), var(--chat-primary)) !important;
-        border: 2px solid rgba(255, 255, 255, 0.9) !important;
-        box-shadow: var(--doolla-shadow-xl) !important;
-        overflow: hidden !important;
+        position: fixed;
+        right: var(--doolla-space-6);
+        bottom: var(--doolla-space-6);
+        width: 52px;
+        height: 52px;
+        box-sizing: border-box;
+        margin: 0;
+        z-index: var(--doolla-z-modal);
+        border-radius: 50%;
+        border-color: var(--chat-primary);
       }
 
-      :host(.minimized):hover {
-        transform: scale(1.05);
-        box-shadow: var(--doolla-shadow-2xl) !important;
-      }
-
-      :host(.minimized) .chat-layout {
-        display: none;
-      }
-
+      :host(.minimized) .chat-layout,
       .minimized-icon {
         display: none;
       }
 
       :host(.minimized) .minimized-icon {
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        display: grid;
+        place-items: center;
         width: 100%;
         height: 100%;
-        color: var(--chat-primary-foreground);
-        font-size: 24px;
-        transition: transform var(--doolla-duration-200) ease;
+        padding: 0;
+        border: 0;
+        background: var(--chat-primary);
+        color: #fff;
+        cursor: pointer;
       }
 
-      :host(.minimized) .minimized-icon:hover {
-        transform: scale(1.1);
+      .minimized-icon:hover {
+        background: var(--chat-primary-hover);
       }
 
-      :host(.minimized) .minimized-icon svg {
-        filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+      .minimized-icon:focus-visible {
+        outline: 2px solid #fff;
+        outline-offset: -4px;
+        border-radius: 50%;
       }
 
       .chat-layout {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 300px;
-        height: 600px;
-        max-height: 80vh;
-        background: var(--chat-muted);
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto minmax(0, 1fr);
+        height: var(--doolla-chat-height, min(600px, 85vh));
       }
 
       :host(.maximized) .chat-layout {
-        height: calc(100vh - 48px);
-        max-height: calc(100vh - 48px);
-      }
-
-      .chat-layout.compact {
-        grid-template-columns: 1fr;
+        height: 100%;
       }
 
       .chat-main {
         display: flex;
         flex-direction: column;
-        border-right: 1px solid var(--chat-outline);
-        background: var(--chat-surface);
+        min-width: 0;
         min-height: 0;
       }
 
-      .chat-layout.compact .chat-main {
-        border-right: none;
-      }
-
       .chat-header {
-        padding: var(--doolla-space-6) var(--doolla-space-7);
-        background: linear-gradient(135deg, var(--chat-primary) 0%, var(--chat-primary-stronger) 100%);
-        border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-        display: flex;
-        flex-direction: column;
-        gap: var(--doolla-space-4);
-        color: var(--chat-primary-foreground);
-        position: relative;
-        overflow: hidden;
-      }
-
-      .chat-header::before {
-        content: '';
-        position: absolute;
-        top: -50%;
-        right: -50%;
-        width: 100%;
-        height: 200%;
-        background: radial-gradient(circle, rgba(255, 255, 255, 0.15) 0%, transparent 70%);
-        opacity: 0.6;
-        pointer-events: none;
-      }
-
-      :host([theme="dark"]) .chat-header {
-        border-bottom-color: rgba(255, 255, 255, 0.1);
-      }
-
-      .header-top {
-        position: relative;
-        z-index: 1;
         display: flex;
         align-items: center;
-        gap: var(--doolla-space-4);
-        width: 100%;
+        gap: var(--doolla-space-3);
+        padding: var(--doolla-space-4) var(--chat-gutter);
+        border-bottom: 1px solid var(--chat-outline);
       }
 
-      .header-left {
-        display: flex;
-        align-items: center;
-        gap: var(--doolla-space-4);
-        min-width: 0;
-        flex: 1;
-      }
-
-      .header-top-actions {
-        display: inline-flex;
-        align-items: center;
-        gap: var(--doolla-space-2);
-        margin-left: auto;
+      .chat-avatar, .assistant-avatar, .empty-state-icon {
+        display: grid;
+        place-items: center;
+        flex: none;
+        border-radius: 8px;
+        background: var(--chat-accent-soft);
+        color: var(--chat-accent-text);
       }
 
       .chat-avatar {
-        width: 44px;
-        height: 44px;
-        border-radius: var(--doolla-border-radius-lg);
-        background: rgba(255, 255, 255, 0.2);
-        backdrop-filter: blur(10px);
-        display: grid;
-        place-items: center;
+        width: 36px;
+        height: 36px;
+        font-size: 13px;
         font-weight: 600;
-        font-size: 16px;
-        letter-spacing: 0.02em;
-        color: var(--chat-primary-foreground);
-        border: 1px solid rgba(255, 255, 255, 0.3);
       }
 
       .header-text {
-        display: flex;
-        flex-direction: column;
-        gap: var(--doolla-space-1);
+        flex: 1;
         min-width: 0;
+        overflow-wrap: anywhere;
       }
 
       .chat-title {
         margin: 0;
-        font-size: 18px;
+        font-size: 16px;
         font-weight: 600;
-        letter-spacing: -0.01em;
-        color: var(--chat-primary-foreground);
       }
 
-      .chat-subtitle {
-        font-size: 13px;
-        letter-spacing: 0.01em;
-        opacity: 0.9;
-        font-weight: 400;
-      }
-
-      :host([theme="dark"]) .chat-subtitle {
-        opacity: 0.78;
+      .chat-subtitle, .empty-state-subtitle {
+        margin: 0;
+        color: var(--chat-text-muted);
       }
 
       .window-controls {
-        display: inline-flex;
-        gap: var(--doolla-space-2);
+        display: flex;
+        gap: var(--doolla-space-1);
+      }
+
+      .window-control-btn, .send-button {
+        display: grid;
+        place-items: center;
+        flex: none;
+        padding: 0;
+        border: 0;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background-color var(--doolla-duration-150);
       }
 
       .window-control-btn {
-        width: 32px;
-        height: 32px;
-        border-radius: var(--doolla-border-radius-lg);
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        background: rgba(255, 255, 255, 0.1);
-        color: var(--chat-primary-foreground);
-        cursor: pointer;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        transition: all var(--doolla-duration-200) ease;
-        backdrop-filter: blur(8px);
-        position: relative;
-        overflow: hidden;
-      }
-
-      .window-control-btn::before {
-        content: '';
-        position: absolute;
-        inset: 0;
-        background: linear-gradient(135deg, rgba(255, 255, 255, 0.2), transparent);
-        opacity: 0;
-        transition: opacity var(--doolla-duration-200) ease;
+        width: 36px;
+        height: 36px;
+        background: transparent;
+        color: var(--chat-text-muted);
       }
 
       .window-control-btn:hover {
-        transform: translateY(-1px) scale(1.05);
-        background: rgba(255, 255, 255, 0.2);
-        box-shadow: 
-          0 8px 25px -8px rgba(0, 0, 0, 0.3),
-          0 0 0 1px rgba(255, 255, 255, 0.2);
-        border-color: rgba(255, 255, 255, 0.3);
+        background: var(--chat-muted);
+        color: var(--chat-text);
       }
 
-      .window-control-btn:hover::before {
-        opacity: 1;
+      .window-control-btn svg, .send-button svg {
+        width: 18px;
+        height: 18px;
       }
 
-      .window-control-btn:active {
-        transform: translateY(0) scale(0.95);
-      }
-
-      .window-control-btn.minimize:hover {
-        background: rgba(255, 193, 7, 0.2);
-        color: #ffc107;
-        box-shadow: 
-          0 8px 25px -8px rgba(255, 193, 7, 0.4),
-          0 0 0 1px rgba(255, 193, 7, 0.3);
-      }
-
-      .window-control-btn.maximize:hover,
-      .window-control-btn.restore:hover {
-        background: rgba(40, 167, 69, 0.2);
-        color: #28a745;
-        box-shadow: 
-          0 8px 25px -8px rgba(40, 167, 69, 0.4),
-          0 0 0 1px rgba(40, 167, 69, 0.3);
-      }
-
-      .window-control-btn svg {
-        width: 16px;
-        height: 16px;
-        transition: transform var(--doolla-duration-150) ease;
-      }
-
-      .window-control-btn:hover svg {
-        transform: scale(1.1);
-      }
-
-      :host([theme="dark"]) .window-control-btn {
-        border-color: rgba(255, 255, 255, 0.1);
-        background: rgba(255, 255, 255, 0.05);
-      }
-
-      :host([theme="dark"]) .window-control-btn:hover {
-        background: rgba(255, 255, 255, 0.15);
-        border-color: rgba(255, 255, 255, 0.25);
+      button:focus-visible {
+        outline: 2px solid var(--chat-primary);
+        outline-offset: 2px;
       }
 
       .chat-messages {
         flex: 1;
-        overflow-y: auto;
-        overflow-x: hidden;
-        padding: var(--doolla-space-6) var(--doolla-space-6) var(--doolla-space-5);
-        background: linear-gradient(180deg, var(--chat-muted) 0%, var(--chat-surface) 70%);
-        scroll-behavior: smooth;
-        display: flex;
-        flex-direction: column;
-        gap: var(--doolla-space-4);
         min-height: 0;
-        max-height: 100%;
-        position: relative;
-      }
-
-      .chat-messages::-webkit-scrollbar {
-        width: 6px;
-      }
-
-      .chat-messages::-webkit-scrollbar-track {
-        background: transparent;
-      }
-
-      .chat-messages::-webkit-scrollbar-thumb {
-        background: var(--doolla-outline-default);
-        border-radius: var(--doolla-border-radius-full);
-        border: 1px solid var(--doolla-background-root);
-      }
-
-      .chat-messages::-webkit-scrollbar-thumb:hover {
-        background: var(--doolla-outline-hover);
-      }
-
-      :host([theme="dark"]) .chat-messages {
-        background: radial-gradient(circle at top, rgba(99, 102, 241, 0.12), transparent 55%), var(--chat-surface);
-      }
-
-      :host([theme="dark"]) .chat-messages::-webkit-scrollbar-thumb {
-        background: var(--doolla-outline-default);
-        border-color: var(--doolla-background-higher);
-      }
-
-      /* Scroll indicator when there's content above */
-      .chat-messages::before {
-        content: '';
-        position: sticky;
-        top: 0;
-        display: block;
-        height: 1px;
-        background: linear-gradient(90deg, transparent, var(--doolla-accent-primary-default), transparent);
-        opacity: 0;
-        transition: opacity var(--doolla-duration-300) ease;
-        z-index: 10;
-        margin: 0 var(--doolla-space-4) var(--doolla-space-2);
-      }
-
-      .chat-messages.has-scroll::before {
-        opacity: 0.5;
+        overflow: auto;
+        overscroll-behavior: contain;
+        scrollbar-color: var(--chat-control-outline) transparent;
+        scrollbar-width: thin;
+        scroll-padding-top: var(--chat-gutter);
+        padding: var(--chat-gutter);
       }
 
       .rich-components-container {
         display: flex;
         flex-direction: column;
-        gap: var(--doolla-space-4);
+        gap: var(--doolla-space-3);
       }
 
-      .rich-component-wrapper {
-        margin: var(--doolla-space-2) 0;
-        animation: fade-in-up 0.3s ease-out;
+      .rich-components-container, .composer {
+        width: 100%;
+        max-width: var(--chat-content-width);
+        margin-inline: auto;
+        min-width: 0;
       }
 
-      .unknown-component {
-        background: var(--doolla-background-higher);
-        border: 1px solid var(--doolla-outline-default);
-        border-radius: var(--doolla-border-radius-md);
-        padding: var(--doolla-space-4);
-        font-family: var(--doolla-font-family-mono);
-        font-size: 12px;
+      .assistant-reply {
+        display: grid;
+        grid-template-columns: 32px minmax(0, 1fr);
+        align-items: start;
+        gap: var(--doolla-space-2);
       }
 
-      .unknown-component p {
-        margin: 0 0 var(--doolla-space-2) 0;
-        color: var(--doolla-foreground-dimmer);
+      .assistant-reply:not(:has(.assistant-content > *, doolla-progress-tracker[has-activity], doolla-progress-tracker > *)),
+      :host(:not([show-progress])) .assistant-reply:not(:has(.assistant-content > *)),
+      :host(:not([show-progress])) .assistant-reply doolla-progress-tracker {
+        display: none;
       }
 
-      .unknown-component pre {
+      .assistant-avatar {
+        width: 32px;
+        height: 32px;
+        font-size: 11px;
+        font-weight: 600;
+      }
+
+      .assistant-name {
+        display: block;
+        margin-bottom: var(--doolla-space-2);
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      .assistant-content {
+        display: flex;
+        flex-direction: column;
+        gap: var(--doolla-space-3);
+        min-width: 0;
+      }
+
+      .assistant-reply doolla-progress-tracker {
+        width: min(100%, 420px);
+      }
+
+      .assistant-reply doolla-progress-tracker:has(> .rich-dataframe, > .rich-text .text-code) {
+        width: 100%;
+      }
+
+      .assistant-reply doolla-progress-tracker:not(:last-child) {
+        margin-bottom: var(--doolla-space-2);
+      }
+
+      .assistant-content:empty {
+        display: none;
+      }
+
+      .assistant-content > .rich-component,
+      doolla-progress-tracker > .rich-component {
+        min-width: 0;
+        margin-bottom: 0;
+      }
+
+      doolla-progress-tracker > .rich-component {
+        --doolla-background-root: var(--chat-surface);
+        --doolla-background-default: var(--chat-surface);
+        --doolla-background-higher: var(--chat-muted);
+        --doolla-foreground-default: var(--chat-text);
+        --doolla-foreground-dimmer: var(--chat-text-muted);
+        --doolla-foreground-dimmest: var(--chat-text-muted);
+        --doolla-outline-default: var(--chat-outline);
+        --doolla-outline-dimmer: var(--chat-outline);
+        --doolla-accent-primary-default: var(--chat-primary);
+        --doolla-border-radius-md: 8px;
+        --doolla-border-radius-lg: 8px;
+        --doolla-shadow-sm: none;
+        --doolla-shadow-md: none;
+      }
+
+      .assistant-content > .rich-text,
+      doolla-progress-tracker > .rich-text {
+        align-self: flex-start;
+        max-width: 100%;
+        padding: var(--doolla-space-3) var(--doolla-space-4);
+        background: var(--chat-muted);
+        border: 0;
+        border-radius: 2px 8px 8px;
+        overflow-wrap: anywhere;
+      }
+
+      .rich-text .text-content {
+        white-space: pre-wrap;
+      }
+
+      .rich-text .text-markdown {
+        padding: 0;
+      }
+
+      .rich-text .text-markdown > :first-child {
+        margin-top: 0;
+      }
+
+      .rich-text .text-markdown > :last-child {
+        margin-bottom: 0;
+      }
+
+      .rich-text .text-markdown a {
+        color: var(--chat-accent-text);
+      }
+
+      .rich-text:has(.text-code) .text-title {
+        margin: 0 0 var(--doolla-space-2);
+        font-size: 13px;
+      }
+
+      .rich-text .text-code {
         margin: 0;
-        color: var(--doolla-foreground-dimmest);
-        overflow-x: auto;
+        padding: var(--doolla-space-2) var(--doolla-space-3);
+        overflow: auto;
+        background: var(--chat-surface);
+        border: 1px solid var(--chat-outline);
+        border-radius: 6px;
       }
 
       .chat-input-area {
-        padding: var(--doolla-space-5) var(--doolla-space-6) var(--doolla-space-6);
+        flex: none;
+        padding: var(--doolla-space-3) var(--chat-gutter) var(--doolla-space-4);
         background: var(--chat-surface);
-        border-top: 1px solid var(--chat-outline);
-        display: flex;
-        flex-direction: column;
-        gap: var(--doolla-space-4);
-        flex-shrink: 0; /* Prevent input area from shrinking */
-      }
-
-      :host([theme="dark"]) .chat-input-area {
-        border-top-color: rgba(148, 163, 184, 0.22);
       }
 
       .chat-input-container {
         display: flex;
-        align-items: center;
+        align-items: flex-end;
         gap: var(--doolla-space-2);
-        padding: 6px 8px 6px 18px;
-        border-radius: 999px;
-        background: var(--chat-muted);
-        border: 1px solid var(--chat-muted-stronger);
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
-        transition: border-color var(--doolla-duration-200) ease, box-shadow var(--doolla-duration-200) ease, background var(--doolla-duration-200) ease;
+        padding: var(--doolla-space-2);
+        border: 1px solid var(--chat-control-outline);
+        border-radius: 12px;
+        background: var(--chat-surface);
+        transition: border-color var(--doolla-duration-150), box-shadow var(--doolla-duration-150);
+      }
+
+      .chat-input-container:hover,
+      .chat-input-container:focus-within {
+        border-color: var(--chat-primary);
       }
 
       .chat-input-container:focus-within {
-        border-color: var(--chat-primary);
-        box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.85);
-        background: rgba(255, 255, 255, 0.95);
-      }
-
-      :host([theme="dark"]) .chat-input-container {
-        background: rgba(15, 23, 42, 0.65);
-        border-color: rgba(100, 116, 139, 0.45);
-        box-shadow: inset 0 1px 0 rgba(148, 163, 184, 0.18);
-      }
-
-      :host([theme="dark"]) .chat-input-container:focus-within {
-        border-color: rgba(129, 140, 248, 0.55);
-        box-shadow: 0 0 0 1px rgba(129, 140, 248, 0.45), inset 0 1px 0 rgba(148, 163, 184, 0.25);
-        background: rgba(30, 41, 59, 0.88);
+        box-shadow: var(--chat-focus-ring);
       }
 
       .message-input {
         flex: 1;
-        border: none;
+        min-width: 0;
+        min-height: 40px;
+        max-height: 128px;
+        field-sizing: content;
+        padding: 9px var(--doolla-space-2);
+        border: 0;
         background: transparent;
-        font-size: 15px;
-        font-family: var(--doolla-font-family-default);
-        line-height: 1.5;
-        color: var(--doolla-foreground-default);
+        color: var(--chat-text);
+        font: inherit;
+        font-size: 16px;
         resize: none;
-        min-height: 48px;
-        max-height: 140px;
-        padding: 12px 0;
         outline: none;
-      }
-
-      :host([theme="dark"]) .message-input {
-        color: rgba(226, 232, 240, 0.95);
       }
 
       .message-input::placeholder {
-        color: rgba(71, 85, 105, 0.8);
-      }
-
-      :host([theme="dark"]) .message-input::placeholder {
-        color: rgba(148, 163, 184, 0.65);
-      }
-
-      .message-input:focus {
-        outline: none;
+        color: var(--chat-text-muted);
       }
 
       .message-input:disabled {
-        color: rgba(148, 163, 184, 0.65);
         cursor: not-allowed;
-      }
-
-      :host([theme="dark"]) .message-input:disabled {
-        color: rgba(100, 116, 139, 0.55);
       }
 
       .send-button {
-        width: 48px;
-        height: 48px;
-        border-radius: 999px;
-        border: none;
-        background: linear-gradient(135deg, var(--chat-primary-stronger), var(--chat-primary));
-        color: var(--chat-primary-foreground);
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-        transition: transform var(--doolla-duration-200) ease, box-shadow var(--doolla-duration-200) ease, filter var(--doolla-duration-200) ease;
-        box-shadow: 0 18px 38px -24px rgba(79, 70, 229, 0.8);
+        width: 40px;
+        height: 40px;
+        background: var(--chat-primary);
+        color: #fff;
       }
 
-      .send-button:hover {
-        transform: translateY(-1px) scale(1.02);
-        box-shadow: 0 25px 45px -24px rgba(79, 70, 229, 0.85);
-      }
-
-      .send-button:active {
-        transform: translateY(0) scale(0.98);
+      .send-button:hover:enabled {
+        background: var(--chat-primary-hover);
       }
 
       .send-button:disabled {
-        background: rgba(148, 163, 184, 0.35);
-        color: rgba(71, 85, 105, 0.7);
+        background: var(--chat-muted);
+        color: var(--chat-text-muted);
         cursor: not-allowed;
-        transform: none;
-        box-shadow: none;
       }
 
-      .send-button svg {
-        width: 18px;
-        height: 18px;
-      }
-
-      .sidebar {
-        background: linear-gradient(180deg, rgba(99, 102, 241, 0.08) 0%, rgba(15, 23, 42, 0.02) 100%);
-        padding: var(--doolla-space-6);
-        display: flex;
-        flex-direction: column;
-        gap: var(--doolla-space-4);
-        overflow-y: auto;
-        overflow-x: hidden;
-        min-height: 0;
-      }
-
-      .sidebar::-webkit-scrollbar {
-        width: 6px;
-      }
-
-      .sidebar::-webkit-scrollbar-track {
-        background: transparent;
-      }
-
-      .sidebar::-webkit-scrollbar-thumb {
-        background: var(--doolla-outline-default);
-        border-radius: var(--doolla-border-radius-full);
-      }
-
-      :host([theme="dark"]) .sidebar {
-        background: linear-gradient(180deg, rgba(79, 70, 229, 0.22) 0%, rgba(15, 23, 42, 0.45) 100%);
+      .composer-hint {
+        margin: var(--doolla-space-2) 0 0;
+        color: var(--chat-text-muted);
+        font-size: 12px;
       }
 
       .empty-state {
         display: flex;
         flex-direction: column;
         align-items: center;
-        justify-content: center;
+        gap: var(--doolla-space-2);
+        padding: var(--doolla-space-12) var(--doolla-space-4);
         text-align: center;
-        color: var(--doolla-foreground-dimmer);
-        padding: var(--doolla-space-12) var(--doolla-space-8);
-        margin: var(--doolla-space-8) var(--doolla-space-6);
-        font-size: 15px;
-        font-weight: 500;
-        line-height: 1.6;
-        background: linear-gradient(135deg, 
-          rgba(255, 255, 255, 0.95) 0%, 
-          rgba(248, 250, 252, 0.9) 50%,
-          rgba(241, 245, 249, 0.85) 100%);
-        border-radius: var(--doolla-border-radius-2xl);
-        border: 2px dashed var(--doolla-accent-primary-default);
-        box-shadow: 
-          var(--doolla-shadow-sm),
-          inset 0 1px 0 rgba(255, 255, 255, 0.8);
-        backdrop-filter: blur(8px);
-        transition: all var(--doolla-duration-300) ease;
       }
 
-      .empty-state:hover {
-        border-color: var(--doolla-accent-primary-stronger);
-        transform: translateY(-2px);
-        box-shadow: 
-          var(--doolla-shadow-lg),
-          inset 0 1px 0 rgba(255, 255, 255, 0.9);
-      }
-
-      :host([theme="dark"]) .empty-state {
-        color: var(--doolla-foreground-dimmer);
-        background: linear-gradient(135deg, 
-          rgba(24, 29, 39, 0.95) 0%, 
-          rgba(31, 39, 51, 0.9) 50%,
-          rgba(17, 21, 28, 0.85) 100%);
-        border-color: var(--doolla-accent-primary-default);
-        box-shadow: 
-          var(--doolla-shadow-md),
-          inset 0 1px 0 rgba(129, 140, 248, 0.2);
-      }
-
-      :host([theme="dark"]) .empty-state:hover {
-        border-color: var(--doolla-accent-primary-hover);
-        box-shadow: 
-          var(--doolla-shadow-xl),
-          inset 0 1px 0 rgba(129, 140, 248, 0.3);
+      .empty-state[hidden] {
+        display: none;
       }
 
       .empty-state-icon {
-        width: 64px;
-        height: 64px;
-        margin: 0 auto var(--doolla-space-6);
-        opacity: 0.7;
-        color: var(--doolla-accent-primary-default);
-        filter: drop-shadow(0 2px 4px rgba(79, 70, 229, 0.2));
+        width: 48px;
+        height: 48px;
+        margin-bottom: var(--doolla-space-1);
+      }
+
+      .empty-state-icon svg {
+        width: 24px;
+        height: 24px;
       }
 
       .empty-state-text {
+        margin: 0;
         font-size: 16px;
         font-weight: 600;
-        color: var(--doolla-foreground-default);
-        margin-bottom: var(--doolla-space-2);
       }
 
-      .empty-state-subtitle {
-        font-size: 14px;
-        color: var(--doolla-foreground-dimmest);
-        opacity: 0.8;
-        font-weight: 400;
-      }
-
-      @media (max-width: 880px) {
-        .chat-layout {
-          grid-template-columns: 1fr;
-          height: min(600px, 85vh);
-          max-height: 85vh;
+      @media (max-width: 760px) {
+        :host {
+          --chat-gutter: var(--doolla-space-4);
         }
 
-        .sidebar {
+        :host(.maximized) {
+          inset: 0;
+          border-radius: 0;
+        }
+      }
+
+      @media (pointer: coarse) {
+        .composer-hint {
           display: none;
         }
 
-        .chat-main {
-          border-right: none;
+        .window-control-btn {
+          width: 44px;
+          height: 44px;
         }
       }
 
-      @media (max-width: 600px) {
-        :host {
-          border-radius: var(--doolla-border-radius-xl);
-        }
-
-        .chat-layout {
-          height: min(500px, 80vh);
-          max-height: 80vh;
-        }
-
-        .chat-header {
-          border-bottom-width: 0;
-          padding: var(--doolla-space-5) var(--doolla-space-5) var(--doolla-space-4);
-        }
-
-        .chat-messages {
-          padding: var(--doolla-space-4) var(--doolla-space-4);
-        }
-
-        .empty-state {
-          padding: var(--doolla-space-10) var(--doolla-space-6);
-          margin: var(--doolla-space-6) var(--doolla-space-4);
-          font-size: 14px;
-        }
-
-        .empty-state-text {
-          font-size: 15px;
-        }
-
-        .empty-state-icon {
-          width: 56px;
-          height: 56px;
-          margin-bottom: var(--doolla-space-5);
-        }
-
-        .chat-input-area {
-          padding: var(--doolla-space-4) var(--doolla-space-4) var(--doolla-space-5);
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          transition-duration: 0s !important;
         }
       }
     `
@@ -711,7 +512,7 @@ export class DoollaChat extends LitElement {
   @property() title = 'Doolla AI Chat';
   @property() placeholder = 'Ask me anything...';
   @property({ type: Boolean }) disabled = false;
-  @property({ type: Boolean }) showProgress = true;
+  @property({ type: Boolean, reflect: true, attribute: 'show-progress' }) showProgress = true;
   @property({ type: Boolean }) allowMinimize = true;
   @property({ reflect: true }) theme = 'light';
   @property({ attribute: 'api-base' }) apiBaseUrl = '';
@@ -790,7 +591,8 @@ export class DoollaChat extends LitElement {
       this.componentObserver.observe(richContainer, {
         childList: true,
         subtree: true,
-        attributes: false
+        attributes: true,
+        attributeFilter: ['has-activity']
       });
     }
 
@@ -856,7 +658,7 @@ export class DoollaChat extends LitElement {
   }
 
   private handleKeyPress(e: KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       this.sendMessage();
     }
@@ -891,42 +693,13 @@ export class DoollaChat extends LitElement {
       this.maximizeWindow();
     }
 
-    // Create user message as a rich component and send to ComponentManager
-    const userRichComponent: RichComponent = {
-      id: `user-message-${Date.now()}`,
-      type: 'user-message',
-      lifecycle: 'create',
-      data: {
-        content: messageText,
-        sender: 'user'
-      },
-      children: [],
-      timestamp: new Date().toISOString(),
-      visible: true,
-      interactive: false
-    };
-
-    // Add user message to ComponentManager for chronological ordering
-    if (this.componentManager) {
-      const update = {
-        operation: 'create' as const,
-        target_id: userRichComponent.id,
-        component: userRichComponent,
-        timestamp: userRichComponent.timestamp
-      };
-      this.componentManager.processUpdate(update);
+    this.addMessage(messageText, 'user');
+    const reply = this.createAssistantReply();
+    if (reply) {
+      reply.tracker.running = true;
+      reply.tracker.activity = '正在发送…';
     }
-
-    // Update empty state after a brief delay to let ComponentManager render
-    setTimeout(() => this.updateEmptyState(), 0);
-
-    console.log('Added user message as rich component to ComponentManager:', userRichComponent);
-
-    // Update the view
-    this.requestUpdate();
-
-    // Update status to working (initial frontend status before backend responds)
-    this.setStatus('working', 'Sending message...', '');
+    this.setStatus(this.showProgress ? 'idle' : 'working', this.showProgress ? '' : 'Sending message...');
 
     // Clear input only if we're sending from the input field
     if (messageText === this.currentMessage) {
@@ -934,7 +707,6 @@ export class DoollaChat extends LitElement {
       const input = this.shadowRoot?.querySelector('.message-input') as HTMLTextAreaElement;
       if (input) {
         input.value = '';
-        input.style.height = 'auto';
       }
     }
 
@@ -955,7 +727,7 @@ export class DoollaChat extends LitElement {
       };
 
       // Stream the response
-      await this.handleStreamingResponse(request);
+      await this.handleStreamingResponse(request, reply);
       return true; // Success
 
     } catch (error) {
@@ -963,11 +735,18 @@ export class DoollaChat extends LitElement {
       this.setStatus('error', 'Failed to send message', error instanceof Error ? error.message : 'Unknown error');
 
       // Add error message
-      this.addMessage(
+      reply?.tracker.interrupt();
+      this.appendMessage(
         `Sorry, I encountered an error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'assistant'
+        'assistant',
+        reply?.content
       );
       return false; // Failure
+    } finally {
+      if (reply) {
+        reply.tracker.running = false;
+        reply.tracker.activity = '';
+      }
     }
   }
 
@@ -1030,31 +809,51 @@ export class DoollaChat extends LitElement {
   }
 
 
+  private createAssistantReply(): AssistantReply | undefined {
+    const conversation = this.shadowRoot?.querySelector('.rich-components-container');
+    if (!conversation) return;
+
+    const row = this.ownerDocument.createElement('section');
+    row.className = 'assistant-reply';
+    row.setAttribute('aria-label', 'Doolla AI');
+    render(html`
+      <div class="assistant-avatar" aria-hidden="true">DA</div>
+      <div>
+        <span class="assistant-name">Doolla AI</span>
+        <doolla-progress-tracker collapsible></doolla-progress-tracker>
+        <div class="assistant-content"></div>
+      </div>
+    `, row);
+    conversation.append(row);
+
+    return {
+      content: row.querySelector<HTMLElement>('.assistant-content')!,
+      tracker: row.querySelector<DoollaProgressTracker>('doolla-progress-tracker')!,
+    };
+  }
+
   addMessage(content: string, type: 'user' | 'assistant') {
-    // Create message as a rich component and send to ComponentManager
-    const richComponent: RichComponent = {
-      id: `${type}-message-${Date.now()}`,
+    const reply = type === 'assistant' ? this.createAssistantReply() : undefined;
+    this.appendMessage(content, type, reply?.content);
+  }
+
+  private appendMessage(content: string, type: 'user' | 'assistant', container?: HTMLElement) {
+    const component: RichComponent = {
+      id: this.generateId(),
       type: `${type}-message`,
       lifecycle: 'create',
-      data: {
-        content: content,
-        sender: type
-      },
+      data: { content, sender: type },
       children: [],
       timestamp: new Date().toISOString(),
       visible: true,
       interactive: false
     };
-
-    if (this.componentManager) {
-      const update = {
-        operation: 'create' as const,
-        target_id: richComponent.id,
-        component: richComponent,
-        timestamp: richComponent.timestamp
-      };
-      this.componentManager.processUpdate(update);
-    }
+    this.componentManager?.processUpdate({
+      operation: 'create',
+      target_id: component.id,
+      component,
+      timestamp: component.timestamp
+    }, { container });
   }
 
   setStatus(status: typeof this.status, message: string, detail?: string) {
@@ -1070,110 +869,92 @@ export class DoollaChat extends LitElement {
   }
 
   getProgressTracker(): DoollaProgressTracker | null {
-    return this.shadowRoot?.querySelector<DoollaProgressTracker>('doolla-progress-tracker') || null;
+    if (!this.showProgress) return null;
+    const trackers = this.shadowRoot?.querySelectorAll<DoollaProgressTracker>('doolla-progress-tracker');
+    return trackers?.[trackers.length - 1] ?? this.createAssistantReply()?.tracker ?? null;
   }
 
-  private async handleStreamingResponse(request: any) {
-    // Ensure API client exists and is up to date
+  private async handleStreamingResponse(request: ChatRequest, initialReply?: AssistantReply) {
     if (!this.apiClient || this.apiClient.baseUrl !== this.apiBaseUrl) {
       this.ensureApiClient();
     }
 
-    // Note: Status bar updates are now controlled by backend via StatusBarUpdateComponent
-    // Frontend only shows initial "Sending message..." status (set in _sendMessageInternal)
-    // and handles connection errors below
+    let reply = initialReply;
+    const process = (chunk: ChatStreamChunk) => {
+      const update = this.getChunkUpdate(chunk);
+      if (!update) return;
+
+      const component = update.component;
+      const type = component?.type;
+      if (component?.type === 'status_bar_update' && component.data?.status === 'working' && this.showProgress) {
+        reply ??= this.createAssistantReply();
+        if (reply) {
+          reply.tracker.running = true;
+          reply.tracker.activity = component.data.message ?? '';
+        }
+        return;
+      }
+      if (type === 'status_bar_update' || type === 'chat_input_update' || type === 'user-message') {
+        this.componentManager?.processUpdate(update);
+        return;
+      }
+
+      // Both transports use the row reserved when the request was sent.
+      reply ??= this.createAssistantReply();
+      const inActivity = component?.data?.chat_section === 'activity' && (this.showProgress || type !== 'dataframe');
+      const container = inActivity ? reply?.tracker : reply?.content;
+      this.componentManager?.processUpdate(update, { container, taskTracker: reply?.tracker });
+    };
 
     let receivedChunk = false;
     try {
-      // Use SSE streaming by default
-      const stream = this.apiClient.streamChat(request);
-
-      for await (const chunk of stream) {
+      for await (const chunk of this.apiClient.streamChat(request)) {
         receivedChunk = true;
-        await this.processChunk(chunk);
+        process(chunk);
       }
-
-      // Backend is responsible for final status via StatusBarUpdateComponent
-      // No frontend status clearing here
-
     } catch (error) {
       if (receivedChunk) throw error;
       console.warn('SSE streaming failed, falling back to polling:', error);
 
       try {
-        // Fallback to polling - show user we're retrying
-        this.setStatus('working', 'Connection issue, retrying...', 'Using fallback method');
-        const response = await this.apiClient.sendPollMessage(request);
-
-        for (const chunk of response.chunks) {
-          await this.processChunk(chunk);
+        if (this.showProgress && reply) {
+          reply.tracker.activity = '连接中断，正在重试…';
+        } else {
+          this.setStatus('working', 'Connection issue, retrying...', 'Using fallback method');
         }
-
-        // Backend is responsible for final status via StatusBarUpdateComponent
-
+        const response = await this.apiClient.sendPollMessage(request);
+        for (const chunk of response.chunks) process(chunk);
       } catch (pollError) {
-        // Only set error status if polling also fails (connection error)
         this.setStatus('error', 'Connection failed', 'Unable to reach server');
         throw pollError;
+      }
+    } finally {
+      // Starter responses can also publish progress from a custom workflow.
+      if (!initialReply && reply) {
+        reply.tracker.running = false;
+        reply.tracker.activity = '';
       }
     }
   }
 
-  private async processChunk(chunk: ChatStreamChunk) {
-    // Dispatch chunk event for external listeners
+  private getChunkUpdate(chunk: ChatStreamChunk): ComponentUpdate | undefined {
     this.dispatchEvent(new CustomEvent('chunk-received', {
       detail: { chunk },
       bubbles: true,
       composed: true
     }));
-
-    console.log('Processing chunk:', chunk); // Debug log
-
-    // Handle rich components via ComponentManager
-    if (chunk.rich && this.componentManager) {
-      console.log('Processing rich component via ComponentManager:', chunk.rich); // Debug log
-      
-      if (chunk.rich.id && chunk.rich.lifecycle) {
-        // Standard rich component with lifecycle
-        const component = chunk.rich as RichComponent;
-        const update = {
-          operation: chunk.rich.lifecycle as any,
-          target_id: chunk.rich.id,
-          component: component,
-          timestamp: new Date().toISOString()
-        };
-        this.componentManager.processUpdate(update);
-      } else if (chunk.rich.type === 'component_update') {
-        // Component update format
-        this.componentManager.processUpdate(chunk.rich as any);
-      } else {
-        // Generic rich component
-        const component = chunk.rich as RichComponent;
-        const update = {
-          operation: 'create' as const,
-          target_id: component.id || `component-${Date.now()}`,
-          component: component,
-          timestamp: new Date().toISOString()
-        };
-        this.componentManager.processUpdate(update);
-      }
-      
-      return;
+    if (!chunk.rich) return;
+    if (chunk.rich.type === 'component_update' && !chunk.rich.lifecycle) {
+      return chunk.rich as ComponentUpdate;
     }
 
-    const componentType = chunk.rich?.type;
-    switch (componentType) {
-      case 'text':
-      case 'thinking':
-      case 'tool_execution':
-        return;
-
-      case 'error':
-        throw new Error(chunk.rich.data?.message || 'Unknown error from agent');
-
-      default:
-        console.log('Received chunk:', componentType, chunk.rich);
-    }
+    const component = chunk.rich as RichComponent;
+    return {
+      operation: component.lifecycle || 'create',
+      target_id: component.id || this.generateId(),
+      component,
+      timestamp: component.timestamp || new Date().toISOString()
+    };
   }
 
   private generateId(): string {
@@ -1214,23 +995,10 @@ export class DoollaChat extends LitElement {
     
     if (emptyState && richContainer) {
       // Show empty state if rich container has no children
-      const hasContent = richContainer.children.length > 0;
-      emptyState.style.display = hasContent ? 'none' : 'flex';
+      emptyState.hidden = !!richContainer.querySelector(
+        ':scope > :not(style, .assistant-reply), .assistant-content > *, doolla-progress-tracker[has-activity], doolla-progress-tracker > *'
+      );
     }
-  }
-
-  /**
-   * Update scroll indicator based on scroll position
-   */
-  private updateScrollIndicator() {
-    const messagesContainer = this.shadowRoot?.querySelector('.chat-messages');
-    if (!messagesContainer) return;
-    
-    // Check if there's content scrolled above
-    const hasScrolledContent = messagesContainer.scrollTop > 10;
-    
-    // Update scroll indicator class
-    messagesContainer.classList.toggle('has-scroll', hasScrolledContent);
   }
 
   /**
@@ -1243,15 +1011,13 @@ export class DoollaChat extends LitElement {
     
     if (!messagesContainer || !richContainer) return;
 
-    // Get the last child element (the most recently added component)
-    const lastComponent = richContainer.lastElementChild as HTMLElement;
-    if (!lastComponent) return;
+    const lastRow = richContainer.lastElementChild;
+    if (!lastRow) return;
+    const lastComponent = lastRow.querySelector('.assistant-content > :last-child') ?? lastRow;
 
     // Scroll so the top of the last component is visible
-    lastComponent.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    
-    // Update scroll indicator after scrolling
-    setTimeout(() => this.updateScrollIndicator(), 100);
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    lastComponent.scrollIntoView({ behavior: reduceMotion ? 'instant' : 'smooth', block: 'start', inline: 'nearest' });
   }
 
   /**
@@ -1261,7 +1027,6 @@ export class DoollaChat extends LitElement {
     if (this.componentManager) {
       this.componentManager.clear();
     }
-    this.getProgressTracker()?.clearItems();
     this.updateEmptyState();
     this.requestUpdate();
   }
@@ -1283,113 +1048,101 @@ export class DoollaChat extends LitElement {
     return html`
       <!-- Minimized icon - shown only when minimized via CSS and allowMinimize is true -->
       ${this.allowMinimize ? html`
-        <div class="minimized-icon" @click=${this.restoreWindow}>
-          <svg viewBox="0 0 24 24" fill="currentColor" width="32" height="32">
+        <button class="minimized-icon" type="button" aria-label="Open chat" @click=${this.restoreWindow}>
+          <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor" width="24" height="24">
             <path d="M20 2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14l4 4V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z"/>
           </svg>
-        </div>
+        </button>
       ` : ''}
 
       <!-- Main chat interface -->
-      <div class="chat-layout ${this.showProgress ? '' : 'compact'}">
-        <div class="chat-main">
-          <div class="chat-header">
-            <div class="header-top">
-              <div class="header-left">
-                <div class="chat-avatar" aria-hidden="true">${this.getTitleInitials()}</div>
-                <div class="header-text">
-                  <h2 class="chat-title">${this.title}</h2>
-                </div>
-              </div>
-              <div class="header-top-actions">
-                <div class="window-controls">
-                  ${this.allowMinimize ? html`
-                    <button
-                      class="window-control-btn minimize"
-                      @click=${this.minimizeWindow}
-                      title="Minimize">
-                      <svg viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M5 12h14v2H5z"/>
-                      </svg>
-                    </button>
-                  ` : ''}
-                  ${this.windowState === 'maximized' ? html`
-                    <button
-                      class="window-control-btn restore"
-                      @click=${this.restoreWindow}
-                      title="Restore">
-                      <svg viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M8 8v2h2V8h6v6h-2v2h4V6H8zm-2 4v8h8v-2H8v-6H6z"/>
-                      </svg>
-                    </button>
-                  ` : html`
-                    <button
-                      class="window-control-btn maximize"
-                      @click=${this.maximizeWindow}
-                      title="Maximize">
-                      <svg viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M5 5v14h14V5H5zm2 2h10v10H7V7z"/>
-                      </svg>
-                    </button>
-                  `}
-                </div>
-              </div>
-            </div>
+      <div class="chat-layout">
+        <header class="chat-header">
+          <div class="chat-avatar" aria-hidden="true">${this.getTitleInitials()}</div>
+          <div class="header-text">
+            <h2 class="chat-title">${this.title}</h2>
+            ${this.subtitle ? html`<p class="chat-subtitle">${this.subtitle}</p>` : ''}
           </div>
-
+          <div class="window-controls">
+            ${this.allowMinimize ? html`
+              <button class="window-control-btn minimize" type="button" aria-label="Minimize" title="Minimize"
+                @click=${this.minimizeWindow}>
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <path d="M5 12h14"/>
+                </svg>
+              </button>
+            ` : ''}
+            ${this.windowState === 'maximized' ? html`
+              <button class="window-control-btn restore" type="button" aria-label="Restore" title="Restore"
+                @click=${this.restoreWindow}>
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <path d="M9 5h10v10M5 9h10v10H5z"/>
+                </svg>
+              </button>
+            ` : html`
+              <button class="window-control-btn maximize" type="button" aria-label="Maximize" title="Maximize"
+                @click=${this.maximizeWindow}>
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <path d="M5 5h14v14H5z"/>
+                </svg>
+              </button>
+            `}
+          </div>
+        </header>
+        <div class="chat-main">
           <div class="chat-messages">
             <!-- Empty state - shown when no components exist -->
             <div class="empty-state" id="empty-state">
-              <div class="empty-state-icon">
-                <svg viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M20 2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14l4 4V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z"/>
+              <div class="empty-state-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <path d="M4 5h16v12H9l-5 3zM8 9h8m-8 4h6" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
               </div>
-              <div class="empty-state-text">Start a conversation</div>
-              <div class="empty-state-subtitle">Type your message below to begin chatting</div>
+              <h3 class="empty-state-text">Start a conversation</h3>
+              <p class="empty-state-subtitle">Ask a question about your data.</p>
             </div>
 
             <!-- Rich Components Container - all content renders here via ComponentManager -->
-            <div class="rich-components-container"></div>
+            <div class="rich-components-container" role="log" aria-label="Conversation"></div>
           </div>
 
           <div class="chat-input-area">
-            <doolla-status-bar
-              .status=${this.status}
-              .message=${this.statusMessage}
-              .detail=${this.statusDetail}
-              theme=${this.theme}>
-            </doolla-status-bar>
+            <div class="composer">
+              <doolla-status-bar
+                .status=${this.status}
+                .message=${this.statusMessage}
+                .detail=${this.statusDetail}
+                theme=${this.theme}>
+              </doolla-status-bar>
 
-            <div class="chat-input-container">
-              <textarea
-                class="message-input"
-                .placeholder=${this.placeholder}
-                .disabled=${this.disabled}
-                @input=${this.handleInput}
-                @keydown=${this.handleKeyPress}
-                rows="1"
-              ></textarea>
-              <button
-                class="send-button"
-                type="button"
-                aria-label="Send message"
-                .disabled=${this.disabled || !this.currentMessage.trim()}
-                @click=${this.sendMessage}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-                </svg>
-              </button>
+              <div class="chat-input-container">
+                <textarea
+                  class="message-input"
+                  aria-label="Message"
+                  .placeholder=${this.placeholder}
+                  .disabled=${this.disabled}
+                  @input=${this.handleInput}
+                  @keydown=${this.handleKeyPress}
+                  rows="1"
+                ></textarea>
+                <button
+                  class="send-button"
+                  type="button"
+                  aria-label="Send message"
+                  .disabled=${this.disabled || !this.currentMessage.trim()}
+                  @click=${this.sendMessage}
+                >
+                  <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 19V5m-6 6 6-6 6 6"/>
+                  </svg>
+                </button>
+              </div>
+              <p class="composer-hint">Enter to send · Shift + Enter for a new line</p>
             </div>
           </div>
         </div>
 
-        ${this.showProgress ? html`
-          <div class="sidebar">
-            <doolla-progress-tracker theme=${this.theme}></doolla-progress-tracker>
-          </div>
-        ` : ''}
       </div>
     `;
   }

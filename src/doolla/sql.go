@@ -45,15 +45,23 @@ func (s SQLTool) Spec() ToolSpec {
 	return ToolSpec{name, desc, objectSchema(map[string]any{"sql": strField("SQL statement")}, "sql")}
 }
 
-func (s SQLTool) Run(ctx context.Context, u User, raw json.RawMessage) (ToolResult, error) {
+func sqlStatement(raw json.RawMessage) (string, error) {
 	var args struct {
 		SQL string `json:"sql"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
-		return ToolResult{}, err
+		return "", err
 	}
 	if strings.TrimSpace(args.SQL) == "" {
-		return ToolResult{}, errors.New("sql is required")
+		return "", errors.New("sql is required")
+	}
+	return args.SQL, nil
+}
+
+func (s SQLTool) Run(ctx context.Context, u User, raw json.RawMessage) (ToolResult, error) {
+	query, err := sqlStatement(raw)
+	if err != nil {
+		return ToolResult{}, err
 	}
 	runner := s.Runner
 	if runner == nil {
@@ -62,12 +70,12 @@ func (s SQLTool) Run(ctx context.Context, u User, raw json.RawMessage) (ToolResu
 		}
 		runner = DatabaseRunner{s.DB}
 	}
-	result, err := runner.RunSQL(ctx, u, args.SQL)
+	result, err := runner.RunSQL(ctx, u, query)
 	if err != nil {
 		return ToolResult{}, err
 	}
 	metadata := map[string]any{}
-	if words := topLevelWords(args.SQL); len(words) > 0 {
+	if words := topLevelWords(query); len(words) > 0 {
 		metadata["query_type"] = words[0]
 	}
 	if len(result.Columns) == 0 {
@@ -122,7 +130,10 @@ func (s SQLTool) Run(ctx context.Context, u User, raw json.RawMessage) (ToolResu
 		content += "\nResults saved to file: " + name
 		metadata["output_file"] = name
 	}
-	component := Component{Type: "dataframe", Data: map[string]any{"title": "Query Results", "description": description, "data": browserRows(records), "columns": cols, "row_count": len(records), "column_count": len(cols), "column_types": map[string]string{}}, Simple: plainToolText(content)}
+	component := Component{Type: "dataframe", Data: map[string]any{
+		"title": "Query Results", "description": description, "data": browserRows(records), "columns": cols,
+		"row_count": len(records), "column_count": len(cols), "column_types": map[string]string{}, "chat_section": "activity",
+	}, Simple: plainToolText(content)}
 	return ToolResult{Content: content, Component: &component, Metadata: metadata}, nil
 }
 

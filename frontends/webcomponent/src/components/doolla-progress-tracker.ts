@@ -16,11 +16,91 @@ export class DoollaProgressTracker extends LitElement {
     css`
       :host {
         display: block;
-        background: var(--doolla-background-default);
-        border: 1px solid var(--doolla-outline-default);
-        border-radius: 0 0 var(--doolla-border-radius-lg) var(--doolla-border-radius-lg);
+        background: var(--chat-surface, var(--doolla-background-default));
+        border: 1px solid var(--chat-outline, var(--doolla-outline-default));
+        border-radius: 8px;
         overflow: hidden;
         font-family: var(--doolla-font-family-default);
+      }
+
+      :host([collapsible]:not([has-activity])) {
+        display: none;
+      }
+
+      :host([collapsible]) {
+        background: var(--chat-muted);
+        overflow: visible;
+      }
+
+      .thought-summary {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--doolla-space-2);
+        box-sizing: border-box;
+        min-height: 40px;
+        padding: var(--doolla-space-2) var(--doolla-space-3);
+        list-style: none;
+        cursor: pointer;
+        color: var(--chat-text);
+      }
+
+      .thought-summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .thought-summary:focus-visible {
+        outline: 2px solid var(--chat-primary);
+        outline-offset: 2px;
+        border-radius: 8px;
+      }
+
+      .thought-summary svg {
+        flex: none;
+        width: 14px;
+        height: 14px;
+        color: var(--chat-text-muted);
+        transition: transform var(--doolla-duration-150);
+      }
+
+      details[open] .thought-summary svg {
+        transform: rotate(90deg);
+      }
+
+      .thought-label {
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      .thought-meta, .thought-activity {
+        color: var(--chat-text-muted);
+        font-size: 12px;
+      }
+
+      .thought-meta.running {
+        color: var(--chat-accent-text);
+      }
+
+      .thought-meta.error {
+        color: var(--chat-error-text, #a8071a);
+      }
+
+      .thought-activity {
+        margin: 0;
+        padding: var(--doolla-space-2) var(--doolla-space-3);
+        overflow-wrap: anywhere;
+      }
+
+      .thought-content {
+        border-top: 1px solid var(--chat-outline);
+      }
+
+      .thought-content .progress-list {
+        background: var(--chat-surface);
+      }
+
+      ::slotted(*) {
+        margin: var(--doolla-space-2) var(--doolla-space-3);
       }
 
       .progress-label {
@@ -33,15 +113,13 @@ export class DoollaProgressTracker extends LitElement {
       .progress-label-text {
         font-size: 11px;
         font-weight: 500;
-        color: var(--doolla-foreground-dimmest);
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
+        color: var(--chat-text-muted, var(--doolla-foreground-dimmest));
         margin: 0;
       }
 
       .progress-summary {
         font-size: 10px;
-        color: var(--doolla-foreground-dimmest);
+        color: var(--chat-text-muted, var(--doolla-foreground-dimmest));
         font-weight: 400;
       }
 
@@ -65,12 +143,13 @@ export class DoollaProgressTracker extends LitElement {
       }
 
       .progress-item:hover {
-        background: var(--doolla-background-higher);
+        background: var(--chat-muted, var(--doolla-background-higher));
       }
 
       .progress-item.in_progress {
-        background: rgba(0, 123, 255, 0.05);
-        border-left: 3px solid var(--doolla-accent-primary-default);
+        background: var(--chat-accent-soft, var(--doolla-accent-primary-subtle));
+        border-left: 3px solid var(--chat-primary, var(--doolla-accent-primary-default));
+        padding-left: calc(var(--doolla-space-4) - 3px);
       }
 
       .progress-item.completed {
@@ -80,15 +159,15 @@ export class DoollaProgressTracker extends LitElement {
       .progress-item.error {
         background: var(--doolla-accent-negative-subtle);
         border-left: 3px solid var(--doolla-accent-negative-default);
-        padding-left: calc(var(--doolla-space-3) - 3px);
+        padding-left: calc(var(--doolla-space-4) - 3px);
       }
 
       .progress-item.error .progress-text {
-        color: var(--doolla-accent-negative-stronger);
+        color: var(--chat-error-text, var(--doolla-accent-negative-stronger));
       }
 
       .progress-item.error .progress-detail {
-        color: var(--doolla-accent-negative-default);
+        color: var(--chat-error-text, var(--doolla-accent-negative-default));
         font-weight: 500;
       }
 
@@ -108,11 +187,11 @@ export class DoollaProgressTracker extends LitElement {
       }
 
       .progress-icon.in_progress {
-        background: var(--doolla-accent-primary-default);
+        background: var(--chat-primary, var(--doolla-accent-primary-default));
       }
 
       .progress-icon.completed {
-        background: var(--doolla-accent-positive-default);
+        background: #389e0d;
       }
 
       .progress-icon.error {
@@ -144,11 +223,12 @@ export class DoollaProgressTracker extends LitElement {
       .progress-content {
         flex: 1;
         min-width: 0;
+        overflow-wrap: anywhere;
       }
 
       .progress-text {
         font-size: 13px;
-        color: var(--doolla-foreground-default);
+        color: var(--chat-text, var(--doolla-foreground-default));
         font-weight: 500;
         margin: 0 0 var(--doolla-space-1) 0;
         line-height: 1.3;
@@ -156,16 +236,20 @@ export class DoollaProgressTracker extends LitElement {
 
       .progress-detail {
         font-size: 11px;
-        color: var(--doolla-foreground-dimmest);
+        color: var(--chat-text-muted, var(--doolla-foreground-dimmest));
         margin: 0;
         line-height: 1.3;
       }
 
       .empty-state {
         padding: var(--doolla-space-6) var(--doolla-space-4);
-        text-align: center;
-        color: var(--doolla-foreground-dimmest);
+        color: var(--chat-text-muted, var(--doolla-foreground-dimmest));
         font-size: 12px;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .spinner-mini { animation: none; }
+        .thought-summary svg { transition: none; }
       }
 
       @keyframes spin {
@@ -178,6 +262,9 @@ export class DoollaProgressTracker extends LitElement {
 
   @property() title = 'Progress';
   @property() theme = 'light';
+  @property({ type: Boolean, reflect: true }) collapsible = false;
+  @property({ type: Boolean }) running = false;
+  @property() activity = '';
   @state() private items: ProgressItem[] = [];
 
   addItem(text: string, detail?: string, id?: string, status: ProgressItem['status'] = 'pending'): string {
@@ -222,41 +309,72 @@ export class DoollaProgressTracker extends LitElement {
     }
   }
 
-  private getProgressSummary() {
-    const completed = this.items.filter(item => item.status === 'completed').length;
-    const total = this.items.length;
-    const inProgress = this.items.filter(item => item.status === 'in_progress').length;
+  interrupt() {
+    this.items = this.items.map(item => item.status === 'in_progress'
+      ? { ...item, status: 'error', detail: '连接中断' }
+      : item);
+  }
 
-    if (inProgress > 0) {
-      return `${completed}/${total} completed`;
-    }
-    return total > 0 ? `${completed}/${total} completed` : '';
+  protected updated() {
+    this.syncActivityVisibility();
+  }
+
+  private syncActivityVisibility() {
+    this.toggleAttribute('has-activity', !!(this.items.length || this.activity || this.children.length));
+  }
+
+  private renderItems() {
+    return this.items.map(item => html`
+      <div class="progress-item ${item.status}" role="listitem">
+        <div class="progress-icon ${item.status}" aria-label=${item.status.replace('_', ' ')} role="img">
+          ${this.getStatusIcon(item.status)}
+        </div>
+        <div class="progress-content">
+          <p class="progress-text">${item.text}</p>
+          ${item.detail ? html`<p class="progress-detail">${item.detail}</p>` : ''}
+        </div>
+      </div>
+    `);
   }
 
   render() {
+    if (this.collapsible) {
+      const failures = this.items.filter(item => item.status === 'error').length;
+      const state = failures ? 'error' : this.running ? 'running' : '';
+      const summary = failures ? `${failures} 个步骤失败`
+        : this.running ? '进行中' : this.items.length ? `${this.items.length} 个步骤` : '';
+      return html`
+        <details>
+          <summary class="thought-summary">
+            <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+              stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m6 4 4 4-4 4"/>
+            </svg>
+            <span class="thought-label">思考过程</span>
+            <span class="thought-meta ${state}">${summary}</span>
+          </summary>
+          <div class="thought-content">
+            ${this.activity ? html`<p class="thought-activity">${this.activity}</p>` : ''}
+            ${this.items.length ? html`<div class="progress-list" role="list">${this.renderItems()}</div>` : ''}
+            <slot @slotchange=${this.syncActivityVisibility}></slot>
+          </div>
+        </details>
+      `;
+    }
+
+    const completed = this.items.filter(item => item.status === 'completed').length;
     return html`
       ${this.items.length > 0 ? html`
         <div class="progress-label">
           <span class="progress-label-text">Tasks</span>
-          <span class="progress-summary">${this.getProgressSummary()}</span>
+          <span class="progress-summary">${completed}/${this.items.length} completed</span>
         </div>
       ` : ''}
 
-      <div class="progress-list">
+      <div class="progress-list" role="list">
         ${this.items.length === 0
           ? html`<div class="empty-state">No tasks yet</div>`
-          : this.items.map(item => html`
-              <div class="progress-item ${item.status}">
-                <div class="progress-icon ${item.status}">
-                  ${this.getStatusIcon(item.status)}
-                </div>
-                <div class="progress-content">
-                  <p class="progress-text">${item.text}</p>
-                  ${item.detail ? html`<p class="progress-detail">${item.detail}</p>` : ''}
-                </div>
-              </div>
-            `)
-        }
+          : this.renderItems()}
       </div>
     `;
   }

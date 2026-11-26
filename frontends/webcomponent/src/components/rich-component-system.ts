@@ -784,6 +784,7 @@ export class TextComponentRenderer extends BaseComponentRenderer {
     container.dataset.componentId = component.id;
 
     const {
+      title,
       content = '',
       markdown = false,
       code_language,
@@ -792,12 +793,20 @@ export class TextComponentRenderer extends BaseComponentRenderer {
       text_align
     } = component.data;
 
+    if (title) {
+      const heading = document.createElement('h3');
+      heading.className = 'text-title';
+      heading.textContent = title;
+      container.append(heading);
+    }
+
     const body = document.createElement(code_language ? 'pre' : 'div');
     if (font_size) body.style.fontSize = font_size;
     if (font_weight) body.style.fontWeight = font_weight;
     if (text_align) body.style.textAlign = text_align;
     if (code_language) {
       body.className = 'text-code';
+      body.tabIndex = 0;
       const code = document.createElement('code');
       code.className = `language-${code_language}`;
       code.textContent = content;
@@ -1685,7 +1694,9 @@ export class ComponentRegistry {
     this.register('progress_bar', new ProgressBarComponentRenderer());
     this.register('notification', new NotificationComponentRenderer());
     this.register('status_indicator', new StatusIndicatorComponentRenderer());
-    this.register('text', new TextComponentRenderer());
+    const textRenderer = new TextComponentRenderer();
+    this.register('text', textRenderer);
+    this.register('sql_statement', textRenderer);
     this.register('dataframe', new DataFrameComponentRenderer());
     this.register('chart', new ChartComponentRenderer());
 
@@ -1809,16 +1820,19 @@ export class ComponentManager {
     ensureRichComponentStyles(this.container);
   }
 
-  processUpdate(update: ComponentUpdate): void {
+  processUpdate(update: ComponentUpdate, target?: {
+    container?: HTMLElement;
+    taskTracker?: DoollaProgressTracker;
+  }): void {
     // Handle UI state updates with special processing
     if (update.component && this.isUIStateUpdate(update.component)) {
-      this.processUIStateUpdate(update.component);
+      this.processUIStateUpdate(update.component, target?.taskTracker);
       return;
     }
 
     switch (update.operation) {
       case 'create':
-        this.createComponent(update);
+        this.createComponent(update, target?.container ?? this.container);
         break;
       case 'update':
         this.updateComponent(update);
@@ -1832,7 +1846,7 @@ export class ComponentManager {
     }
   }
 
-  private createComponent(update: ComponentUpdate): void {
+  private createComponent(update: ComponentUpdate, container: HTMLElement): void {
     if (!update.component) return;
 
     const component = this.normalizeComponent(update.component);
@@ -1840,8 +1854,8 @@ export class ComponentManager {
     this.components.set(component.id, component);
     this.elements.set(component.id, element);
 
-    // Determine where to place the component
-    this.positionComponent(element);
+    container.appendChild(element);
+    this.triggerScroll();
   }
 
   private updateComponent(update: ComponentUpdate): void {
@@ -1884,17 +1898,10 @@ export class ComponentManager {
     }
   }
 
-  private positionComponent(element: HTMLElement): void {
-    // Always append to container
-    this.container.appendChild(element);
-
-    // Trigger scroll to bottom in parent chat component
-    this.triggerScroll();
-  }
-
   private triggerScroll(): void {
     // Find the parent doolla-chat component and trigger its scroll method
-    const doollaChat = document.querySelector('doolla-chat') as any;
+    const root = this.container.getRootNode();
+    const doollaChat = (root instanceof ShadowRoot ? root.host : this.container.ownerDocument.querySelector('doolla-chat')) as any;
     if (doollaChat && typeof doollaChat.scrollToLastMessage === 'function') {
       // Use requestAnimationFrame to wait for DOM update
       requestAnimationFrame(() => {
@@ -1944,7 +1951,7 @@ export class ComponentManager {
            component.type === 'chat_input_update';
   }
 
-  private processUIStateUpdate(component: RichComponent): void {
+  private processUIStateUpdate(component: RichComponent, tracker?: DoollaProgressTracker): void {
     console.log('processUIStateUpdate called with type:', component.type, 'component:', component);
 
     switch (component.type) {
@@ -1952,7 +1959,7 @@ export class ComponentManager {
         this.updateStatusBar(component);
         break;
       case 'task_tracker_update':
-        this.updateTaskTracker(component);
+        this.updateTaskTracker(component, tracker ?? this.uiElement<DoollaProgressTracker>('doolla-progress-tracker'));
         break;
       case 'chat_input_update':
         this.updateChatInput(component);
@@ -1974,8 +1981,7 @@ export class ComponentManager {
     bar.detail = detail || '';
   }
 
-  private updateTaskTracker(component: RichComponent): void {
-    const tracker = this.uiElement<DoollaProgressTracker>('doolla-progress-tracker');
+  private updateTaskTracker(component: RichComponent, tracker: DoollaProgressTracker | null): void {
     if (!tracker) return;
     const { operation, task, task_id, status, detail } = component.data || {};
 

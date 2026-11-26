@@ -9,334 +9,99 @@ export class DoollaStatusBar extends LitElement {
     css`
       :host {
         display: block;
-        background: rgba(254, 93, 38, 0.1);
-        border: 2px solid var(--doolla-orange);
-        border-radius: var(--doolla-border-radius-xl);
-        padding: var(--doolla-space-4) var(--doolla-space-5);
-        margin-bottom: var(--doolla-space-4);
-        font-family: var(--doolla-font-family-default);
-        font-size: 14px;
-        font-weight: 500;
-        color: var(--doolla-navy);
-        backdrop-filter: blur(12px);
-        box-shadow:
-          var(--doolla-shadow-lg),
-          0 0 0 1px rgba(254, 93, 38, 0.1);
-        
-        /* Animation properties */
-        opacity: 1;
-        transform: translateY(0) scale(1);
-        max-height: 200px;
-        overflow: hidden;
-        transition: 
-          opacity var(--doolla-duration-300) cubic-bezier(0.4, 0, 0.2, 1),
-          transform var(--doolla-duration-300) cubic-bezier(0.4, 0, 0.2, 1),
-          max-height var(--doolla-duration-300) ease,
-          margin var(--doolla-duration-300) ease,
-          padding var(--doolla-duration-300) ease,
-          box-shadow var(--doolla-duration-200) ease;
-      }
-
-      /* Hide when there's no actual content */
-      :host(.no-content) {
-        opacity: 0;
-        transform: translateY(-8px) scale(0.95);
-        max-height: 0;
-        margin: 0;
-        padding: 0;
-        pointer-events: none;
-      }
-
-      :host(:empty) {
-        display: none;
-      }
-
-      /* Entrance animation when content appears */
-      :host(.entering) {
-        animation: statusEnter var(--doolla-duration-300) ease-out;
-      }
-
-      /* Exit animation when content disappears */
-      :host(.exiting) {
-        animation: statusExit var(--doolla-duration-300) ease-in;
-      }
-
-      @keyframes statusEnter {
-        0% {
-          opacity: 0;
-          transform: translateY(-12px) scale(0.9);
-          max-height: 0;
-        }
-        50% {
-          opacity: 0.8;
-          transform: translateY(-2px) scale(1.02);
-        }
-        100% {
-          opacity: 1;
-          transform: translateY(0) scale(1);
-          max-height: 200px;
-        }
-      }
-
-      @keyframes statusExit {
-        0% {
-          opacity: 1;
-          transform: translateY(0) scale(1);
-          max-height: 200px;
-        }
-        50% {
-          opacity: 0.5;
-          transform: translateY(-4px) scale(0.98);
-        }
-        100% {
-          opacity: 0;
-          transform: translateY(-12px) scale(0.9);
-          max-height: 0;
-        }
-      }
-
-      :host([status="working"]) {
-        background: var(--doolla-orange);
-        border-color: var(--doolla-orange);
-        color: white;
-        box-shadow:
-          var(--doolla-shadow-xl),
-          0 0 0 2px rgba(254, 93, 38, 0.3),
-          0 0 20px rgba(254, 93, 38, 0.4);
-      }
-
-      :host([status="warning"]) {
-        background: var(--doolla-accent-warning-subtle);
-        border-color: var(--doolla-accent-warning-default);
-      }
-
-      :host([status="error"]) {
-        background: linear-gradient(135deg, var(--doolla-accent-negative-subtle) 0%, rgba(239, 68, 68, 0.15) 100%);
-        border-color: var(--doolla-accent-negative-default);
-        color: var(--doolla-accent-negative-stronger);
-        box-shadow: 
-          var(--doolla-shadow-xl),
-          0 0 0 2px rgba(239, 68, 68, 0.3),
-          0 0 20px rgba(239, 68, 68, 0.2);
-        animation: errorShake 0.5s ease-in-out, errorGlow 2s ease-in-out;
+        font: 14px/1.55 var(--doolla-font-family-default);
+        --status-color: var(--chat-accent-text, #0958d9);
+        --status-background: var(--chat-accent-soft, #e6f4ff);
+        --status-border: var(--chat-accent-border, #bae0ff);
       }
 
       :host([status="success"]) {
-        background: linear-gradient(135deg, var(--doolla-accent-positive-subtle) 0%, rgba(16, 185, 129, 0.15) 100%);
-        border-color: var(--doolla-accent-positive-default);
-        color: var(--doolla-accent-positive-stronger);
-        box-shadow: 
-          var(--doolla-shadow-xl),
-          0 0 0 2px rgba(16, 185, 129, 0.3),
-          0 0 20px rgba(16, 185, 129, 0.2);
-        animation: successPulse 0.6s ease-out, successGlow 2s ease-out;
+        --status-color: #237804;
+        --status-background: #f6ffed;
+        --status-border: #b7eb8f;
       }
 
-      @keyframes errorShake {
-        0%, 100% { transform: translateX(0); }
-        10%, 30%, 50%, 70%, 90% { transform: translateX(-4px); }
-        20%, 40%, 60%, 80% { transform: translateX(4px); }
+      :host([status="warning"]) {
+        --status-color: #873800;
+        --status-background: #fffbe6;
+        --status-border: #ffe58f;
       }
 
-      @keyframes successPulse {
-        0% { 
-          transform: scale(1); 
-        }
-        50% { 
-          transform: scale(1.05); 
-        }
-        100% { 
-          transform: scale(1); 
-        }
+      :host([status="error"]) {
+        --status-color: #a8071a;
+        --status-background: #fff2f0;
+        --status-border: #ffccc7;
+      }
+
+      :host([theme="dark"][status="success"]) {
+        --status-color: #b7eb8f;
+        --status-background: #162312;
+        --status-border: #274916;
+      }
+
+      :host([theme="dark"][status="warning"]) {
+        --status-color: #ffe58f;
+        --status-background: #2b2111;
+        --status-border: #594214;
+      }
+
+      :host([theme="dark"][status="error"]) {
+        --status-color: #ffccc7;
+        --status-background: #2a1215;
+        --status-border: #58181c;
       }
 
       .status-content {
         display: flex;
-        align-items: center;
-        gap: var(--doolla-space-3);
-        animation: contentFadeIn var(--doolla-duration-200) ease-out;
+        align-items: flex-start;
+        gap: var(--doolla-space-2);
+        padding: var(--doolla-space-2) var(--doolla-space-3);
+        margin: 0 0 var(--doolla-space-2);
+        color: var(--status-color);
+        background: var(--status-background);
+        border: 1px solid var(--status-border);
+        border-radius: 8px;
+        overflow-wrap: anywhere;
       }
 
-      @keyframes contentFadeIn {
-        0% {
-          opacity: 0;
-          transform: translateY(4px);
-        }
-        100% {
-          opacity: 1;
-          transform: translateY(0);
-        }
+      .status-indicator, .spinner {
+        box-sizing: border-box;
+        margin-top: 4px;
+        flex: none;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
       }
 
       .status-indicator {
-        width: 12px;
-        height: 12px;
-        border-radius: var(--doolla-border-radius-full);
-        background: var(--doolla-accent-primary-default);
-        flex-shrink: 0;
-        box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5), 0 2px 8px rgba(0, 0, 0, 0.15);
-      }
-
-      .status-indicator.working {
-        background: white;
-        animation: workingPulse 1.5s ease-in-out infinite;
-      }
-
-      .status-indicator.error {
-        background: linear-gradient(45deg, var(--doolla-accent-negative-default), var(--doolla-accent-negative-stronger));
-        box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5), 0 0 8px rgba(239, 68, 68, 0.4);
-      }
-
-      .status-indicator.success {
-        background: linear-gradient(45deg, var(--doolla-accent-positive-default), var(--doolla-accent-positive-stronger));
-        box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5), 0 0 8px rgba(16, 185, 129, 0.4);
+        display: grid;
+        place-items: center;
+        border: 1px solid currentColor;
+        font-size: 10px;
+        font-weight: 600;
+        line-height: 1;
       }
 
       .spinner {
-        width: 16px;
-        height: 16px;
-        border: 3px solid rgba(21, 168, 168, 0.3);
-        border-top-color: var(--doolla-teal);
-        border-radius: var(--doolla-border-radius-full);
-        animation: spin 1s linear infinite, spinnerGlow 2s ease-in-out infinite;
-        flex-shrink: 0;
+        border: 2px solid var(--status-border);
+        border-top-color: currentColor;
+        animation: spin 1s linear infinite;
       }
 
       .status-text {
-        flex: 1;
         font-weight: 600;
-        line-height: 1.4;
-        letter-spacing: 0.01em;
       }
 
       .status-detail {
         font-size: 12px;
-        color: var(--doolla-foreground-dimmest);
-        margin-left: var(--doolla-space-4);
-        opacity: 0.9;
-        font-weight: 500;
-      }
-
-      .status-actions {
-        display: flex;
-        align-items: center;
-        gap: var(--doolla-space-2);
-        margin-left: auto;
-      }
-
-      .status-button {
-        padding: var(--doolla-space-1) var(--doolla-space-2);
-        border: 1px solid var(--doolla-outline-default);
-        border-radius: var(--doolla-border-radius-sm);
-        background: var(--doolla-background-subtle);
-        color: var(--doolla-foreground-dimmer);
-        font-size: 11px;
-        font-weight: 500;
-        cursor: pointer;
-        transition: all var(--doolla-duration-150) ease;
-      }
-
-      .status-button:hover {
-        background: var(--doolla-background-higher);
-        border-color: var(--doolla-outline-hover);
-        color: var(--doolla-foreground-default);
       }
 
       @keyframes spin {
-        to {
-          transform: rotate(360deg);
-        }
+        to { transform: rotate(360deg); }
       }
 
-      @keyframes pulse {
-        0%, 100% {
-          opacity: 1;
-          transform: scale(1);
-        }
-        50% {
-          opacity: 0.6;
-          transform: scale(1.1);
-        }
-      }
-
-      @keyframes workingPulse {
-        0%, 100% {
-          opacity: 1;
-          transform: scale(1);
-          box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.8), 0 2px 8px rgba(255, 255, 255, 0.3);
-        }
-        50% {
-          opacity: 0.9;
-          transform: scale(1.2);
-          box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.9), 0 4px 12px rgba(255, 255, 255, 0.5);
-        }
-      }
-
-      @keyframes spinnerGlow {
-        0%, 100% {
-          filter: drop-shadow(0 0 2px rgba(21, 168, 168, 0.5));
-        }
-        50% {
-          filter: drop-shadow(0 0 6px rgba(21, 168, 168, 0.8));
-        }
-      }
-
-      @keyframes errorGlow {
-        0% {
-          box-shadow: 
-            var(--doolla-shadow-xl),
-            0 0 0 2px rgba(239, 68, 68, 0.3),
-            0 0 20px rgba(239, 68, 68, 0.2);
-        }
-        50% {
-          box-shadow: 
-            var(--doolla-shadow-2xl),
-            0 0 0 3px rgba(239, 68, 68, 0.4),
-            0 0 30px rgba(239, 68, 68, 0.3);
-        }
-        100% {
-          box-shadow: 
-            var(--doolla-shadow-xl),
-            0 0 0 2px rgba(239, 68, 68, 0.3),
-            0 0 20px rgba(239, 68, 68, 0.2);
-        }
-      }
-
-      @keyframes successGlow {
-        0% {
-          box-shadow: 
-            var(--doolla-shadow-xl),
-            0 0 0 2px rgba(16, 185, 129, 0.3),
-            0 0 20px rgba(16, 185, 129, 0.2);
-        }
-        50% {
-          box-shadow: 
-            var(--doolla-shadow-2xl),
-            0 0 0 3px rgba(16, 185, 129, 0.4),
-            0 0 30px rgba(16, 185, 129, 0.3);
-        }
-        100% {
-          box-shadow: 
-            var(--doolla-shadow-xl),
-            0 0 0 2px rgba(16, 185, 129, 0.3),
-            0 0 20px rgba(16, 185, 129, 0.2);
-        }
-      }
-
-      /* Dark theme overrides */
-      :host([theme="dark"]) {
-        background: var(--doolla-background-higher);
-        border-color: var(--doolla-outline-default);
-      }
-
-      :host([theme="dark"]) .status-button {
-        background: var(--doolla-background-highest);
-        border-color: var(--doolla-outline-default);
-      }
-
-      :host([theme="dark"]) .status-button:hover {
-        background: var(--doolla-background-highest);
-        border-color: var(--doolla-outline-hover);
+      @media (prefers-reduced-motion: reduce) {
+        .spinner { animation: none; }
       }
     `
   ];
@@ -344,104 +109,23 @@ export class DoollaStatusBar extends LitElement {
   @property({ reflect: true }) status: 'idle' | 'working' | 'error' | 'success' | 'warning' = 'idle';
   @property() message = '';
   @property() detail = '';
-  @property() theme = 'light';
-
-  private _previousHasContent = false;
-  private _enterTimeout: number | null = null;
-  private _exitTimeout: number | null = null;
-  private _lastUpdateTime = 0;
-
-  disconnectedCallback() {
-    super.disconnectedCallback();
-
-    // Clean up pending animation timeouts when component is removed
-    if (this._enterTimeout !== null) {
-      clearTimeout(this._enterTimeout);
-      this._enterTimeout = null;
-    }
-    if (this._exitTimeout !== null) {
-      clearTimeout(this._exitTimeout);
-      this._exitTimeout = null;
-    }
-  }
-
-  updated(_changedProperties: Map<string | number | symbol, unknown>) {
-    // Update CSS class based on content
-    const hasContent = Boolean(this.message && this.message.trim());
-
-    // Cancel any pending animation timeouts to prevent race conditions
-    if (this._enterTimeout !== null) {
-      clearTimeout(this._enterTimeout);
-      this._enterTimeout = null;
-    }
-    if (this._exitTimeout !== null) {
-      clearTimeout(this._exitTimeout);
-      this._exitTimeout = null;
-    }
-
-    // Debounce rapid updates to prevent animation jank
-    const now = Date.now();
-    const timeSinceLastUpdate = now - this._lastUpdateTime;
-    const shouldDebounce = timeSinceLastUpdate < 100; // 100ms debounce
-
-    // Handle animation classes
-    if (hasContent !== this._previousHasContent) {
-      if (hasContent) {
-        // Content appeared - animate in
-        this.classList.remove('no-content', 'exiting');
-
-        if (!shouldDebounce) {
-          // Only animate if not rapid-firing
-          this.classList.add('entering');
-
-          // Remove entering class after animation
-          this._enterTimeout = window.setTimeout(() => {
-            this.classList.remove('entering');
-            this._enterTimeout = null;
-          }, 300);
-        }
-      } else {
-        // Content disappeared - animate out
-        this.classList.remove('entering');
-
-        if (!shouldDebounce) {
-          // Only animate if not rapid-firing
-          this.classList.add('exiting');
-
-          // Add no-content class after animation
-          this._exitTimeout = window.setTimeout(() => {
-            this.classList.remove('exiting');
-            this.classList.add('no-content');
-            this._exitTimeout = null;
-          }, 300);
-        } else {
-          // If rapid-firing, skip animation and go straight to no-content
-          this.classList.add('no-content');
-        }
-      }
-    } else if (!hasContent) {
-      // Ensure no-content class is applied when no content
-      this.classList.add('no-content');
-    }
-
-    this._previousHasContent = hasContent;
-    this._lastUpdateTime = now;
-  }
+  @property({ reflect: true }) theme = 'light';
 
   render() {
-    // Only show if there's actual content (message) to display
-    if (!this.message || !this.message.trim()) {
-      return html``;
-    }
-
+    const symbol = this.status === 'success' ? '✓' : this.status === 'idle' ? 'i' : '!';
     return html`
-      <div class="status-content">
-        ${this.status === 'working'
-          ? html`<div class="spinner"></div>`
-          : html`<div class="status-indicator ${this.status}"></div>`
-        }
-        <span class="status-text">${this.message}</span>
-        ${this.detail ? html`<span class="status-detail">${this.detail}</span>` : ''}
+      <div role="status">
+        ${this.message.trim() ? html`
+          <div class="status-content">
+            ${this.status === 'working'
+              ? html`<span class="spinner" aria-hidden="true"></span>`
+              : html`<span class="status-indicator" aria-hidden="true">${symbol}</span>`}
+            <div>
+              <div class="status-text">${this.message}</div>
+              ${this.detail ? html`<div class="status-detail">${this.detail}</div>` : ''}
+            </div>
+          </div>
+        ` : ''}
       </div>
     `;
   }

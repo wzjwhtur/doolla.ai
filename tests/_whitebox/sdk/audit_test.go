@@ -59,8 +59,13 @@ func TestAuditAgentExecution(t *testing.T) {
 	if err := a.Chat(ctx, u, "conversation", "query", func(Component) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if len(events[AuditToolAccess]) != 3 || len(events[AuditToolInvocation]) != 2 || len(events[AuditToolResult]) != 2 || len(events[AuditAIResponse]) != 2 || len(events[AuditUIFeatureAccess]) != 5 {
+	if len(events[AuditToolAccess]) != 3 || len(events[AuditToolInvocation]) != 2 || len(events[AuditToolResult]) != 2 || len(events[AuditAIResponse]) != 2 || len(events[AuditUIFeatureAccess]) != 6 {
 		t.Fatalf("unexpected audit events: %v", events)
+	}
+	if !slices.ContainsFunc(events[AuditUIFeatureAccess], func(e AuditEvent) bool {
+		return e.FeatureName == "sql_query" && e.AccessGranted != nil && *e.AccessGranted
+	}) {
+		t.Fatal("SQL visibility permission was not audited")
 	}
 	access := events[AuditToolAccess][0]
 	if access.AccessGranted == nil || *access.AccessGranted || !slices.Equal(*access.RequiredGroups, []string{"admin"}) || access.Reason == "" {

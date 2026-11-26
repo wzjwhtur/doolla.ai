@@ -285,14 +285,14 @@ func (a *Agent) reply(ctx context.Context, t Turn, messages []Message, tools []T
 		return response, nil
 	})
 }
-func (a *Agent) runTool(ctx context.Context, t Turn, registered registeredTool, call ToolCall) (ToolResult, error) {
+func (a *Agent) prepareTool(ctx context.Context, t Turn, registered registeredTool, call ToolCall) (json.RawMessage, error) {
 	tool := registered.Tool
 	args, err := a.registry.prepare(ctx, t.User, registered, json.RawMessage(call.Function.Arguments))
 	if err != nil {
 		_, trace := a.toolSpan(ctx, call)
 		trace.outcome("success", false)
 		trace.end(err)
-		return ToolResult{}, err
+		return nil, err
 	}
 	for _, h := range a.config.Hooks {
 		if h.BeforeTool != nil {
@@ -301,10 +301,14 @@ func (a *Agent) runTool(ctx context.Context, t Turn, registered registeredTool, 
 			args, err = h.BeforeTool(child, t, tool, args)
 			trace.end(err)
 			if err != nil {
-				return ToolResult{}, err
+				return nil, err
 			}
 		}
 	}
+	return args, nil
+}
+
+func (a *Agent) runTool(ctx context.Context, t Turn, tool Tool, call ToolCall, args json.RawMessage) (ToolResult, error) {
 	result, err := withRecovery(ctx, a, Event{Operation: "tool", Name: tool.Spec().Name, Turn: t}, func() (ToolResult, error) {
 		child, trace := a.toolSpan(ctx, call)
 		result, err := a.config.Audit.invoke(child, t, call, args, func() (ToolResult, error) { return tool.Run(child, t.User, args) })
@@ -371,6 +375,7 @@ func uiFeatureGroups(overrides map[string][]string, replaceDefaults bool) map[st
 	if !replaceDefaults {
 		groups = map[string][]string{
 			"tool_names":                      {"admin", "user"},
+			"sql_query":                       {"admin", "user"},
 			"tool_arguments":                  {"admin"},
 			"tool_error":                      {"admin"},
 			"tool_invocation_message_in_chat": {"admin"},
