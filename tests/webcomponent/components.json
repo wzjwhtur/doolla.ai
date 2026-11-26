@@ -1,0 +1,864 @@
+[
+  {
+    "type": "text",
+    "id": "run-id/text-1",
+    "data": {
+      "content": "Component test covering creation, updates, charts and actions.",
+      "markdown": true
+    }
+  },
+  {
+    "type": "text",
+    "id": "run-id/text-2",
+    "data": {
+      "content": "# Test Text Component\n\nThis component demonstrates **markdown rendering** with various formatting:\n\n## Formatting Examples\n- **Bold text** for emphasis\n- *Italic text* for style\n- `inline code` for snippets\n- ~~Strikethrough~~ for deletions\n\n### Lists\n1. First ordered item\n2. Second ordered item\n3. Third ordered item\n\n### Code Block\n```go\nfunc hello() string { return \"Markdown works!\" }\n```\n\n> Blockquote to test quote rendering\n\nThis validates that markdown is properly parsed and displayed.",
+      "markdown": true
+    }
+  },
+  {
+    "type": "text",
+    "id": "run-id/text-2",
+    "data": {
+      "content": "# Updated Text Component\n\nText has been **successfully updated** with new markdown content!\n\n- Update operation works ✓\n- Markdown still renders ✓",
+      "markdown": true
+    },
+    "lifecycle": "update"
+  },
+  {
+    "type": "status_card",
+    "id": "run-id/status_card-3",
+    "data": {
+      "title": "Status Card Test",
+      "status": "pending",
+      "description": "Testing status card component...",
+      "icon": "⏳",
+      "actions": [],
+      "collapsible": true,
+      "collapsed": false
+    }
+  },
+  {
+    "type": "status_card",
+    "id": "run-id/status_card-3",
+    "data": {
+      "title": "Status Card Test",
+      "status": "running",
+      "description": "Processing test...",
+      "icon": "⏳",
+      "actions": [],
+      "collapsible": true,
+      "collapsed": false
+    },
+    "lifecycle": "update"
+  },
+  {
+    "type": "status_card",
+    "id": "run-id/status_card-3",
+    "data": {
+      "title": "Status Card Test",
+      "status": "completed",
+      "description": "Test completed successfully!",
+      "icon": "✅",
+      "actions": [],
+      "collapsible": true,
+      "collapsed": false
+    },
+    "lifecycle": "update"
+  },
+  {
+    "type": "progress_display",
+    "id": "run-id/progress_display-4",
+    "data": {
+      "label": "Test Progress",
+      "value": 0.0,
+      "description": "Starting test...",
+      "status": "info",
+      "show_percentage": true,
+      "animated": true,
+      "indeterminate": false
+    }
+  },
+  {
+    "type": "progress_display",
+    "id": "run-id/progress_display-4",
+    "data": {
+      "label": "Test Progress",
+      "value": 0.5,
+      "description": "Halfway there...",
+      "status": "info",
+      "show_percentage": true,
+      "animated": true,
+      "indeterminate": false
+    },
+    "lifecycle": "update"
+  },
+  {
+    "type": "progress_display",
+    "id": "run-id/progress_display-4",
+    "data": {
+      "label": "Test Progress",
+      "value": 1.0,
+      "description": "Complete!",
+      "status": "success",
+      "show_percentage": true,
+      "animated": true,
+      "indeterminate": false
+    },
+    "lifecycle": "update"
+  },
+  {
+    "type": "card",
+    "id": "run-id/card-5",
+    "data": {
+      "title": "Test Card with Markdown",
+      "content": "# Card Content\n\nThis card demonstrates **markdown rendering** within cards:\n\n- Interactive action buttons\n- Collapsible sections\n- Status indicators\n- `Formatted text`\n\nClick the buttons below to test interactivity!",
+      "icon": "🃏",
+      "status": "info",
+      "actions": [
+        {
+          "label": "Test Action",
+          "action": "/test-action",
+          "variant": "primary"
+        },
+        {
+          "label": "Cancel",
+          "action": "/cancel",
+          "variant": "secondary"
+        }
+      ],
+      "collapsible": true,
+      "collapsed": false,
+      "markdown": true
+    }
+  },
+  {
+    "type": "card",
+    "id": "run-id/card-5",
+    "data": {
+      "title": "Test Card with Markdown",
+      "content": "# Card Updated Successfully!\n\nThe card content has been **updated** with:\n- New status (success)\n- New markdown content\n- Same action buttons\n\n✓ Update operation verified",
+      "icon": "🃏",
+      "status": "success",
+      "actions": [
+        {
+          "label": "Test Action",
+          "action": "/test-action",
+          "variant": "primary"
+        },
+        {
+          "label": "Cancel",
+          "action": "/cancel",
+          "variant": "secondary"
+        }
+      ],
+      "collapsible": true,
+      "collapsed": false,
+      "markdown": true
+    },
+    "lifecycle": "update"
+  },
+  {
+    "type": "task_list",
+    "id": "run-id/task_list-6",
+    "data": {
+      "title": "Webcomponent Validation Workflow",
+      "tasks": [
+        {
+          "id": "run-id/item-1",
+          "title": "Setup development environment",
+          "description": "Install dependencies and configure tools",
+          "status": "completed",
+          "progress": 1.0
+        },
+        {
+          "id": "run-id/item-2",
+          "title": "Write test suite",
+          "description": "Create comprehensive component tests",
+          "status": "in_progress",
+          "progress": 0.7
+        },
+        {
+          "id": "run-id/item-3",
+          "title": "Run validation",
+          "description": "Validate all components render correctly",
+          "status": "pending"
+        },
+        {
+          "id": "run-id/item-4",
+          "title": "Prune webcomponent",
+          "description": "Remove unused code and cruft",
+          "status": "pending"
+        }
+      ],
+      "show_progress": true,
+      "allow_reorder": false,
+      "show_timestamps": true
+    }
+  },
+  {
+    "type": "task_list",
+    "id": "run-id/task_list-6",
+    "data": {
+      "title": "Webcomponent Validation Workflow (Updated)",
+      "tasks": [
+        {
+          "id": "run-id/item-1",
+          "title": "Setup development environment",
+          "description": "Install dependencies and configure tools",
+          "status": "completed",
+          "progress": 1.0
+        },
+        {
+          "id": "run-id/item-2",
+          "title": "Write test suite",
+          "description": "Create comprehensive component tests",
+          "status": "completed",
+          "progress": 1.0
+        },
+        {
+          "id": "run-id/item-3",
+          "title": "Run validation",
+          "description": "Validate all components render correctly",
+          "status": "in_progress",
+          "progress": 0.3
+        },
+        {
+          "id": "run-id/item-4",
+          "title": "Prune webcomponent",
+          "description": "Remove unused code and cruft",
+          "status": "pending"
+        }
+      ],
+      "show_progress": true,
+      "allow_reorder": false,
+      "show_timestamps": true
+    },
+    "lifecycle": "update"
+  },
+  {
+    "type": "progress_bar",
+    "id": "run-id/progress_bar-7",
+    "data": {
+      "value": 0.3,
+      "label": "Loading",
+      "show_percentage": true,
+      "status": "info",
+      "animated": false
+    }
+  },
+  {
+    "type": "progress_bar",
+    "id": "run-id/progress_bar-7",
+    "data": {
+      "value": 0.8,
+      "label": "Loading",
+      "show_percentage": true,
+      "status": "success",
+      "animated": false
+    },
+    "lifecycle": "update"
+  },
+  {
+    "type": "notification",
+    "id": "run-id/notification-8",
+    "data": {
+      "message": "This is a info notification",
+      "title": "Info Test",
+      "level": "info",
+      "dismissible": true,
+      "auto_dismiss": false,
+      "auto_dismiss_delay": 5000,
+      "actions": []
+    }
+  },
+  {
+    "type": "notification",
+    "id": "run-id/notification-9",
+    "data": {
+      "message": "This is a success notification",
+      "title": "Success Test",
+      "level": "success",
+      "dismissible": true,
+      "auto_dismiss": false,
+      "auto_dismiss_delay": 5000,
+      "actions": []
+    }
+  },
+  {
+    "type": "notification",
+    "id": "run-id/notification-10",
+    "data": {
+      "message": "This is a warning notification",
+      "title": "Warning Test",
+      "level": "warning",
+      "dismissible": true,
+      "auto_dismiss": false,
+      "auto_dismiss_delay": 5000,
+      "actions": []
+    }
+  },
+  {
+    "type": "notification",
+    "id": "run-id/notification-11",
+    "data": {
+      "message": "This is a error notification",
+      "title": "Error Test",
+      "level": "error",
+      "dismissible": true,
+      "auto_dismiss": false,
+      "auto_dismiss_delay": 5000,
+      "actions": []
+    }
+  },
+  {
+    "type": "status_indicator",
+    "id": "run-id/status_indicator-12",
+    "data": {
+      "status": "running",
+      "message": "Processing...",
+      "pulse": true
+    }
+  },
+  {
+    "type": "status_indicator",
+    "id": "run-id/status_indicator-12",
+    "data": {
+      "status": "success",
+      "message": "Done!",
+      "pulse": false
+    },
+    "lifecycle": "update"
+  },
+  {
+    "type": "badge",
+    "id": "run-id/badge-13",
+    "data": {
+      "text": "Test Badge",
+      "variant": "primary",
+      "size": "medium"
+    }
+  },
+  {
+    "type": "icon_text",
+    "id": "run-id/icon_text-14",
+    "data": {
+      "icon": "🔧",
+      "text": "Tool Icon Test",
+      "variant": "default",
+      "size": "medium",
+      "alignment": "left"
+    }
+  },
+  {
+    "type": "button",
+    "id": "run-id/button-15",
+    "data": {
+      "label": "Single Button",
+      "action": "/button-test",
+      "variant": "primary",
+      "size": "medium",
+      "icon": "🔘",
+      "icon_position": "left",
+      "disabled": false
+    }
+  },
+  {
+    "type": "button_group",
+    "id": "run-id/button_group-16",
+    "data": {
+      "buttons": [
+        {
+          "label": "Option 1",
+          "action": "/option1",
+          "variant": "primary"
+        },
+        {
+          "label": "Option 2",
+          "action": "/option2",
+          "variant": "secondary"
+        },
+        {
+          "label": "Option 3",
+          "action": "/option3",
+          "variant": "success"
+        }
+      ],
+      "orientation": "horizontal",
+      "spacing": "medium",
+      "alignment": "start",
+      "full_width": false
+    }
+  },
+  {
+    "type": "dataframe",
+    "id": "run-id/dataframe-17",
+    "data": {
+      "data": [
+        {
+          "id": 1,
+          "name": "Alice",
+          "age": 30,
+          "city": "New York",
+          "salary": 75000
+        },
+        {
+          "id": 2,
+          "name": "Bob",
+          "age": 25,
+          "city": "San Francisco",
+          "salary": 85000
+        },
+        {
+          "id": 3,
+          "name": "Charlie",
+          "age": 35,
+          "city": "Chicago",
+          "salary": 70000
+        },
+        {
+          "id": 4,
+          "name": "Diana",
+          "age": 28,
+          "city": "Boston",
+          "salary": 80000
+        },
+        {
+          "id": 5,
+          "name": "Eve",
+          "age": 32,
+          "city": "Seattle",
+          "salary": 90000
+        }
+      ],
+      "columns": [
+        "id",
+        "name",
+        "age",
+        "city",
+        "salary"
+      ],
+      "title": "📊 Employee Data",
+      "description": "Sample employee dataset demonstrating **DataFrame** features:\n\n- **Searchable**: Try searching for names or cities\n- **Sortable**: Click column headers to sort\n- **Exportable**: Export to CSV/Excel\n- **Paginated**: Navigate through rows\n\n*5 employees across different cities*",
+      "row_count": 5,
+      "column_count": 5,
+      "max_rows_displayed": 100,
+      "searchable": true,
+      "sortable": true,
+      "filterable": true,
+      "exportable": true,
+      "striped": true,
+      "bordered": true,
+      "compact": false,
+      "paginated": true,
+      "page_size": 25
+    }
+  },
+  {
+    "type": "dataframe",
+    "id": "run-id/dataframe-17",
+    "data": {
+      "data": [
+        {
+          "id": 1,
+          "name": "Alice",
+          "age": 30,
+          "city": "New York",
+          "salary": 75000
+        },
+        {
+          "id": 2,
+          "name": "Bob",
+          "age": 25,
+          "city": "San Francisco",
+          "salary": 85000
+        },
+        {
+          "id": 3,
+          "name": "Charlie",
+          "age": 35,
+          "city": "Chicago",
+          "salary": 70000
+        },
+        {
+          "id": 4,
+          "name": "Diana",
+          "age": 28,
+          "city": "Boston",
+          "salary": 80000
+        },
+        {
+          "id": 5,
+          "name": "Eve",
+          "age": 32,
+          "city": "Seattle",
+          "salary": 90000
+        },
+        {
+          "id": 6,
+          "name": "Frank",
+          "age": 29,
+          "city": "Austin",
+          "salary": 78000
+        }
+      ],
+      "columns": [
+        "id",
+        "name",
+        "age",
+        "city",
+        "salary"
+      ],
+      "title": "📊 Employee Data (Updated)",
+      "description": "Dataset **updated** with new employee!\n\n✓ Added Frank from Austin\n✓ Now showing 6 employees\n✓ Update operation verified",
+      "row_count": 6,
+      "column_count": 5,
+      "max_rows_displayed": 100,
+      "searchable": true,
+      "sortable": true,
+      "filterable": true,
+      "exportable": true,
+      "striped": true,
+      "bordered": true,
+      "compact": false,
+      "paginated": true,
+      "page_size": 25
+    },
+    "lifecycle": "update"
+  },
+  {
+    "type": "chart",
+    "id": "run-id/chart-18",
+    "data": {
+      "data": [
+        {
+          "x": [
+            "Product A",
+            "Product B",
+            "Product C",
+            "Product D"
+          ],
+          "y": [
+            20,
+            35,
+            30,
+            25
+          ],
+          "type": "bar",
+          "name": "Sales",
+          "marker": {
+            "color": "#667eea"
+          }
+        }
+      ],
+      "layout": {
+        "title": "Product Sales",
+        "xaxis": {
+          "title": "Products"
+        },
+        "yaxis": {
+          "title": "Sales (units)"
+        }
+      },
+      "chart_type": "bar",
+      "title": "Sales Chart"
+    }
+  },
+  {
+    "type": "chart",
+    "id": "run-id/chart-18",
+    "data": {
+      "data": [
+        {
+          "x": [
+            "Jan",
+            "Feb",
+            "Mar",
+            "Apr",
+            "May"
+          ],
+          "y": [
+            10,
+            15,
+            13,
+            17,
+            21
+          ],
+          "type": "scatter",
+          "mode": "lines+markers",
+          "name": "Revenue",
+          "line": {
+            "color": "#10b981",
+            "width": 3
+          }
+        }
+      ],
+      "layout": {
+        "title": "Monthly Revenue Trend",
+        "xaxis": {
+          "title": "Month"
+        },
+        "yaxis": {
+          "title": "Revenue ($1000s)"
+        }
+      },
+      "chart_type": "line",
+      "title": "Revenue Chart"
+    },
+    "lifecycle": "update"
+  },
+  {
+    "type": "artifact",
+    "id": "run-id/artifact-19",
+    "data": {
+      "artifact_id": "run-id/sample-artifact",
+      "content": "<svg width=\"200\" height=\"200\" xmlns=\"http://www.w3.org/2000/svg\">\n    <circle cx=\"100\" cy=\"100\" r=\"80\" fill=\"#667eea\" opacity=\"0.8\"/>\n    <circle cx=\"100\" cy=\"100\" r=\"60\" fill=\"#764ba2\" opacity=\"0.6\"/>\n    <circle cx=\"100\" cy=\"100\" r=\"40\" fill=\"#f093fb\" opacity=\"0.4\"/>\n    <text x=\"100\" y=\"105\" text-anchor=\"middle\" fill=\"white\" font-size=\"20\" font-weight=\"bold\">\n        Test SVG\n    </text>\n</svg>",
+      "artifact_type": "svg",
+      "title": "SVG Circle Visualization",
+      "description": "Concentric circles demonstration",
+      "editable": true,
+      "fullscreen_capable": true,
+      "external_renderable": true
+    }
+  },
+  {
+    "type": "log_viewer",
+    "id": "run-id/log_viewer-20",
+    "data": {
+      "title": "System Logs",
+      "entries": [
+        {
+          "timestamp": "2020-01-01T12:00:00Z",
+          "level": "info",
+          "message": "System started"
+        },
+        {
+          "timestamp": "2020-01-01T12:00:01Z",
+          "level": "info",
+          "message": "Loading configuration..."
+        },
+        {
+          "timestamp": "2020-01-01T12:00:02Z",
+          "level": "info",
+          "message": "Configuration loaded successfully"
+        }
+      ],
+      "max_entries": 100,
+      "searchable": true,
+      "show_timestamps": true,
+      "auto_scroll": true
+    }
+  },
+  {
+    "type": "log_viewer",
+    "id": "run-id/log_viewer-20",
+    "data": {
+      "title": "System Logs",
+      "entries": [
+        {
+          "timestamp": "2020-01-01T12:00:00Z",
+          "level": "info",
+          "message": "System started"
+        },
+        {
+          "timestamp": "2020-01-01T12:00:01Z",
+          "level": "info",
+          "message": "Loading configuration..."
+        },
+        {
+          "timestamp": "2020-01-01T12:00:02Z",
+          "level": "info",
+          "message": "Configuration loaded successfully"
+        },
+        {
+          "timestamp": "2020-01-01T12:00:03Z",
+          "level": "warning",
+          "message": "Memory usage at 75%"
+        }
+      ],
+      "max_entries": 100,
+      "searchable": true,
+      "show_timestamps": true,
+      "auto_scroll": true
+    },
+    "lifecycle": "update"
+  },
+  {
+    "type": "log_viewer",
+    "id": "run-id/log_viewer-20",
+    "data": {
+      "title": "System Logs",
+      "entries": [
+        {
+          "timestamp": "2020-01-01T12:00:00Z",
+          "level": "info",
+          "message": "System started"
+        },
+        {
+          "timestamp": "2020-01-01T12:00:01Z",
+          "level": "info",
+          "message": "Loading configuration..."
+        },
+        {
+          "timestamp": "2020-01-01T12:00:02Z",
+          "level": "info",
+          "message": "Configuration loaded successfully"
+        },
+        {
+          "timestamp": "2020-01-01T12:00:03Z",
+          "level": "warning",
+          "message": "Memory usage at 75%"
+        },
+        {
+          "timestamp": "2020-01-01T12:00:04Z",
+          "level": "error",
+          "message": "Connection timeout",
+          "data": {
+            "host": "api.example.com",
+            "port": 443
+          }
+        }
+      ],
+      "max_entries": 100,
+      "searchable": true,
+      "show_timestamps": true,
+      "auto_scroll": true
+    },
+    "lifecycle": "update"
+  },
+  {
+    "type": "log_viewer",
+    "id": "run-id/log_viewer-20",
+    "data": {
+      "title": "System Logs",
+      "entries": [
+        {
+          "timestamp": "2020-01-01T12:00:00Z",
+          "level": "info",
+          "message": "System started"
+        },
+        {
+          "timestamp": "2020-01-01T12:00:01Z",
+          "level": "info",
+          "message": "Loading configuration..."
+        },
+        {
+          "timestamp": "2020-01-01T12:00:02Z",
+          "level": "info",
+          "message": "Configuration loaded successfully"
+        },
+        {
+          "timestamp": "2020-01-01T12:00:03Z",
+          "level": "warning",
+          "message": "Memory usage at 75%"
+        },
+        {
+          "timestamp": "2020-01-01T12:00:04Z",
+          "level": "error",
+          "message": "Connection timeout",
+          "data": {
+            "host": "api.example.com",
+            "port": 443
+          }
+        },
+        {
+          "timestamp": "2020-01-01T12:00:05Z",
+          "level": "info",
+          "message": "Reconnected successfully"
+        }
+      ],
+      "max_entries": 100,
+      "searchable": true,
+      "show_timestamps": true,
+      "auto_scroll": true
+    },
+    "lifecycle": "update"
+  },
+  {
+    "type": "status_bar_update",
+    "id": "run-id/status_bar_update-21",
+    "data": {
+      "status": "info",
+      "message": "Running comprehensive component test..."
+    }
+  },
+  {
+    "type": "task_tracker_update",
+    "id": "run-id/task_tracker_update-22",
+    "data": {
+      "operation": "add_task",
+      "task": {
+        "id": "run-id/item-5",
+        "title": "Validate Text Components",
+        "description": "Test text, markdown, and formatting",
+        "status": "completed",
+        "progress": 1.0
+      }
+    }
+  },
+  {
+    "type": "task_tracker_update",
+    "id": "run-id/task_tracker_update-22",
+    "data": {
+      "operation": "add_task",
+      "task": {
+        "id": "run-id/item-6",
+        "title": "Validate Data Components",
+        "description": "Test DataFrame, Chart, Code blocks",
+        "status": "in_progress",
+        "progress": 0.6
+      }
+    }
+  },
+  {
+    "type": "task_tracker_update",
+    "id": "run-id/task_tracker_update-22",
+    "data": {
+      "operation": "add_task",
+      "task": {
+        "id": "run-id/item-7",
+        "title": "Validate Interactive Components",
+        "description": "Test buttons, actions, and UI state",
+        "status": "pending"
+      }
+    }
+  },
+  {
+    "type": "task_tracker_update",
+    "id": "run-id/task_tracker_update-22",
+    "data": {
+      "operation": "update_task",
+      "task_id": "run-id/item-6",
+      "status": "completed",
+      "progress": 1.0
+    }
+  },
+  {
+    "type": "status_bar_update",
+    "id": "run-id/status_bar_update-21",
+    "data": {
+      "status": "success",
+      "message": "All components validated successfully!"
+    }
+  },
+  {
+    "type": "chat_input_update",
+    "id": "run-id/chat_input_update-23",
+    "data": {
+      "placeholder": "Type a message to test chat input updates...",
+      "disabled": false
+    }
+  },
+  {
+    "type": "status_card",
+    "id": "run-id/status_card-24",
+    "data": {
+      "title": "✅ Test Suite Complete",
+      "status": "completed",
+      "description": "Component sequence complete.",
+      "icon": "✅",
+      "actions": [],
+      "collapsible": false,
+      "collapsed": false
+    }
+  }
+]

@@ -1,0 +1,47 @@
+{
+  "name": "@doolla/webcomponent",
+  "version": "2.0.0",
+  "description": "Lit-based web components for Doolla User Agents",
+  "main": "dist/doolla-components.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build",
+    "test": "node tests/run-browser-tests.mjs"
+  },
+  "keywords": [
+    "doolla",
+    "ai",
+    "sql",
+    "web-components",
+    "lit",
+    "chat",
+    "llm",
+    "natural-language"
+  ],
+  "type": "commonjs",
+  "homepage": "https://doolla.ai",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "dependencies": {
+    "lit": "^3.3.1",
+    "markdown-it": "15.0.3",
+    "plotly.js-dist-min": "^3.1.0"
+  },
+  "devDependencies": {
+    "@storybook/addon-actions": "^8.6.14",
+    "@storybook/addon-controls": "^8.6.14",
+    "@storybook/addon-docs": "^8.6.14",
+    "@storybook/addon-essentials": "^8.6.14",
+    "@storybook/web-components": "^8.6.14",
+    "@storybook/web-components-vite": "^8.6.14",
+    "@types/plotly.js-dist-min": "^2.3.4",
+    "storybook": "^8.6.14",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.5"
+  }
+}

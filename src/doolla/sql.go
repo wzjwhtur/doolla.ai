@@ -1,0 +1,261 @@
+package doolla
+
+import (
+	"context"
+	"database/sql"
+	"encoding/csv"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"maps"
+	"math"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type SQLTool struct {
+	DisableArtifacts  bool
+	DB                *sql.DB
+	Artifacts         ResultFiles
+	Runner            SQLRunner
+	Name, Description string
+}
+
+func objectSchema(properties map[string]any, required ...string) map[string]any {
+	out := map[string]any{"type": "object", "properties": properties}
+	if len(required) > 0 {
+		out["required"] = required
+	}
+	return out
+}
+func strField(description string) map[string]any {
+	return map[string]any{"type": "string", "description": description}
+}
+
+func (s SQLTool) Spec() ToolSpec {
+	name, desc := s.Name, s.Description
+	if name == "" {
+		name = "run_sql"
+	}
+	if desc == "" {
+		desc = "Execute SQL on the configured database."
+	}
+	return ToolSpec{name, desc, objectSchema(map[string]any{"sql": strField("SQL statement")}, "sql")}
+}
+
+func (s SQLTool) Run(ctx context.Context, u User, raw json.RawMessage) (ToolResult, error) {
+	var args struct {
+		SQL string `json:"sql"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return ToolResult{}, err
+	}
+	if strings.TrimSpace(args.SQL) == "" {
+		return ToolResult{}, errors.New("sql is required")
+	}
+	runner := s.Runner
+	if runner == nil {
+		if s.DB == nil {
+			return ToolResult{}, errors.New("SQL runner is required")
+		}
+		runner = DatabaseRunner{s.DB}
+	}
+	result, err := runner.RunSQL(ctx, u, args.SQL)
+	if err != nil {
+		return ToolResult{}, err
+	}
+	metadata := map[string]any{}
+	if words := topLevelWords(args.SQL); len(words) > 0 {
+		metadata["query_type"] = words[0]
+	}
+	if len(result.Columns) == 0 {
+		text := "Statement executed successfully."
+		if result.Affected != nil {
+			text = fmt.Sprintf("Query executed successfully. %d row(s) affected.", *result.Affected)
+			metadata["rows_affected"] = *result.Affected
+		}
+		return ToolResult{Content: text, Metadata: metadata, Component: &Component{Type: "notification", Data: map[string]any{"level": "success", "message": text}, Simple: plainToolText(text)}}, nil
+	}
+	cols, records := result.Columns, result.Rows
+	metadata["results"], metadata["columns"], metadata["row_count"] = records, cols, len(records)
+	var csvText strings.Builder
+	w := csv.NewWriter(&csvText)
+	if err := w.Write(cols); err != nil {
+		return ToolResult{}, err
+	}
+	for _, record := range records {
+		fields := make([]string, len(cols))
+		for i, col := range cols {
+			if value := record[col]; value != nil {
+				fields[i] = fmt.Sprint(value)
+			}
+		}
+		if err := w.Write(fields); err != nil {
+			return ToolResult{}, err
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		return ToolResult{}, err
+	}
+	text := csvText.String()
+	preview := []rune(text)
+	content := string(preview[:min(len(preview), 1000)])
+	if len(preview) > 1000 {
+		content += "\n(Results truncated to 1000 characters.)"
+	}
+	description := fmt.Sprintf("SQL query returned %d rows with %d columns", len(records), len(cols))
+	if len(records) == 0 {
+		description = "No rows returned"
+		content = "Query executed successfully. No rows returned."
+	} else if !s.DisableArtifacts {
+		files := s.Artifacts
+		if files == nil {
+			files = Artifacts{Directory: "."}
+		}
+		name := "query_results_" + newID() + ".csv"
+		if err := files.Write(u, name, []byte(text)); err != nil {
+			return ToolResult{}, err
+		}
+		content += "\nResults saved to file: " + name
+		metadata["output_file"] = name
+	}
+	component := Component{Type: "dataframe", Data: map[string]any{"title": "Query Results", "description": description, "data": browserRows(records), "columns": cols, "row_count": len(records), "column_count": len(cols), "column_types": map[string]string{}}, Simple: plainToolText(content)}
+	return ToolResult{Content: content, Component: &component, Metadata: metadata}, nil
+}
+
+// JSON numbers in browser components are parsed as IEEE-754 doubles. Keep
+// the full Go types in SDK metadata and the original values in CSV exports.
+func browserRows(rows []map[string]any) []map[string]any {
+	var browser []map[string]any
+	for i, row := range rows {
+		var copyRow map[string]any
+		for col, v := range row {
+			text := exactBrowserNumber(v)
+			if text == "" {
+				continue
+			}
+			if browser == nil {
+				browser = slices.Clone(rows)
+			}
+			if copyRow == nil {
+				copyRow = maps.Clone(row)
+				browser[i] = copyRow
+			}
+			copyRow[col] = text
+		}
+	}
+	if browser != nil {
+		return browser
+	}
+	return rows
+}
+
+func exactBrowserNumber(v any) string {
+	const maxSafe = 1<<53 - 1
+	switch n := v.(type) {
+	case int:
+		return exactBrowserNumber(int64(n))
+	case uint:
+		return exactBrowserNumber(uint64(n))
+	case int64:
+		if n > maxSafe || n < -maxSafe {
+			return strconv.FormatInt(n, 10)
+		}
+	case uint64:
+		if n > maxSafe {
+			return strconv.FormatUint(n, 10)
+		}
+	case json.Number:
+		// A decimal or exponent may also encode significant digits or scale.
+		if i, err := n.Int64(); err != nil || i > maxSafe || i < -maxSafe {
+			return n.String()
+		}
+	}
+	return ""
+}
+
+type SQLResult struct {
+	Columns  []string
+	Rows     []map[string]any
+	Affected *int64
+}
+type SQLRunner interface {
+	RunSQL(context.Context, User, string) (SQLResult, error)
+}
+type DatabaseRunner struct{ DB *sql.DB }
+
+func (r DatabaseRunner) RunSQL(ctx context.Context, u User, query string) (SQLResult, error) {
+	if commandWithoutRows(query) {
+		res, err := r.DB.ExecContext(ctx, query)
+		if err != nil {
+			return SQLResult{}, err
+		}
+		result := SQLResult{}
+		if n, err := res.RowsAffected(); err == nil {
+			result.Affected = &n
+		}
+		return result, nil
+	}
+	rows, err := r.DB.QueryContext(ctx, query)
+	if err != nil {
+		return SQLResult{}, err
+	}
+	defer rows.Close()
+	names, err := rows.Columns()
+	if err != nil {
+		return SQLResult{}, err
+	}
+	names = uniqueColumns(names)
+	result := SQLResult{Columns: names, Rows: []map[string]any{}}
+	values := make([]any, len(names))
+	targets := make([]any, len(names))
+	for i := range values {
+		targets[i] = &values[i]
+	}
+	for rows.Next() {
+		if err := rows.Scan(targets...); err != nil {
+			return SQLResult{}, err
+		}
+		record := make(map[string]any, len(names))
+		for i, value := range values {
+			switch v := value.(type) {
+			case []byte:
+				value = string(v)
+			case time.Time:
+				value = v.Format(time.RFC3339Nano)
+			case float64:
+				if math.IsInf(v, 0) || math.IsNaN(v) {
+					value = fmt.Sprint(v)
+				}
+			}
+			record[names[i]] = value
+		}
+		result.Rows = append(result.Rows, record)
+	}
+	return result, rows.Err()
+}
+func uniqueColumns(src []string) []string {
+	out := make([]string, len(src))
+	seen := map[string]bool{}
+	reserved := map[string]bool{}
+	for _, s := range src {
+		reserved[s] = true
+	}
+	for i, s := range src {
+		name := s
+		if seen[name] {
+			for n := 2; ; n++ {
+				name = fmt.Sprintf("%s_%d", s, n)
+				if !seen[name] && !reserved[name] {
+					break
+				}
+			}
+		}
+		seen[name] = true
+		out[i] = name
+	}
+	return out
+}

@@ -1,0 +1,75 @@
+{
+  "openapi": "3.1.0",
+  "info": {"title": "Doolla Chat API", "version": "2"},
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Server health",
+        "responses": {
+          "200": {"description": "Server is running", "content": {"application/json": {"schema": {"type": "object", "required": ["status", "service"], "properties": {"status": {"const": "healthy"}, "service": {"const": "doolla"}}}}}}
+        }
+      }
+    },
+    "/api/doolla/v2/chat_poll": {
+      "post": {
+        "summary": "Send a message and receive all chat components in one response",
+        "requestBody": {"$ref": "#/components/requestBodies/Chat"},
+        "responses": {
+          "200": {"description": "Completed turn", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatResponse"}}}},
+          "400": {"description": "Invalid chat request"},
+          "401": {"description": "User resolution failed"},
+          "409": {"description": "Request ID conflicts with a prior turn or its response is unavailable"},
+          "503": {"description": "Request cache is full"}
+        }
+      }
+    },
+    "/api/doolla/v2/chat_sse": {
+      "post": {
+        "summary": "Stream chat components as server-sent events",
+        "requestBody": {"$ref": "#/components/requestBodies/Chat"},
+        "responses": {
+          "200": {"description": "Each data event contains a ChatChunk. The final event contains [DONE].", "content": {"text/event-stream": {"schema": {"type": "string"}}}},
+          "400": {"description": "Invalid chat request"},
+          "401": {"description": "User resolution failed"},
+          "409": {"description": "Request ID conflicts with a prior turn or its response is unavailable"},
+          "503": {"description": "Request cache is full"}
+        }
+      }
+    },
+    "/api/doolla/v2/chat_websocket": {
+      "get": {
+        "summary": "Upgrade to a WebSocket and exchange chat messages",
+        "description": "Send one ChatRequest per text frame. Each response contains ChatChunk frames followed by a completion frame, or an error frame.",
+        "responses": {"101": {"description": "Switching protocols"}}
+      }
+    }
+  },
+  "components": {
+    "requestBodies": {
+      "Chat": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatRequest"}, "example": {"message": "/help"}}}}
+    },
+    "schemas": {
+      "ChatRequest": {
+        "type": "object", "required": ["message"],
+        "properties": {
+          "message": {"type": "string"}, "conversation_id": {"type": "string"}, "request_id": {"type": "string"},
+          "metadata": {"type": "object", "additionalProperties": true}
+        }
+      },
+      "ChatChunk": {
+        "type": "object", "required": ["rich", "simple", "conversation_id", "request_id", "timestamp"],
+        "properties": {
+          "rich": {"type": "object"}, "simple": {"type": ["object", "null"]},
+          "conversation_id": {"type": "string"}, "request_id": {"type": "string"}, "timestamp": {"type": "number"}
+        }
+      },
+      "ChatResponse": {
+        "type": "object", "required": ["conversation_id", "request_id", "chunks", "total_chunks"],
+        "properties": {
+          "conversation_id": {"type": "string"}, "request_id": {"type": "string"},
+          "chunks": {"type": "array", "items": {"$ref": "#/components/schemas/ChatChunk"}}, "total_chunks": {"type": "integer"}
+        }
+      }
+    }
+  }
+}

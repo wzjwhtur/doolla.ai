@@ -1,0 +1,1 @@
+../../../../tests/_whitebox/memory/qdrant_local_test.go

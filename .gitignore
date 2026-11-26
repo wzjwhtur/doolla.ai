@@ -1,0 +1,27 @@
+build
+.DS_Store
+.idea
+docs/*.html
+dist
+.env
+*.sqlite
+chroma.sqlite3
+*.bin
+milvus.db
+.milvus.db.lock
+
+# Frontend builds and dependencies
+frontends/**/node_modules/
+frontends/**/.storybook-static/
+frontends/**/package-lock.json
+
+# Local Go runtime and dependencies used to regenerate the embedded frontend
+.doolla/
+/src/doolla/web_components/node_modules/
+/doolla
+/src/doolla/doolla
+/src/doolla/integrations/database/drivers/doolla-db
+/src/doolla/integrations/chromalocal/doolla-chroma
+
+# Local conversations and database query artifacts
+/data/

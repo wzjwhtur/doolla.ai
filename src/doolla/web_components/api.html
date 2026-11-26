@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Doolla Chat API</title>
+<style>
+body { margin: 2rem auto; padding: 0 1rem; max-width: 58rem; font: 1rem/1.5 system-ui, sans-serif }
+textarea, pre { box-sizing: border-box; padding: .75rem; width: 100%; font: .95rem/1.4 monospace }
+pre { background: #f4f5f7; overflow: auto; max-height: 30rem }
+summary { cursor: pointer; padding: .5rem 0; overflow-wrap: anywhere }
+button { padding: .45rem 1rem }
+</style></head><body>
+<main>
+<h1>Doolla Chat API</h1>
+<p><a href="/openapi.json">OpenAPI specification</a></p>
+<section id="operations" aria-label="Endpoints"></section>
+<h2>Try a polling request</h2>
+<form id="try"><label for="body">Request body</label>
+<textarea id="body" rows="3">{"message": "/help"}</textarea>
+<button type="submit">Send request</button></form>
+<pre id="result" hidden aria-live="polite"></pre>
+</main><script type="module">
+const operations = document.querySelector('#operations');
+try {
+  const response = await fetch('/openapi.json');
+  const spec = await response.json();
+  for (const [path, methods] of Object.entries(spec.paths)) {
+    for (const [method, op] of Object.entries(methods)) {
+      const details = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.textContent = method.toUpperCase() + ' ' + path;
+      const explanation = document.createElement('p');
+      explanation.textContent = [op.summary, op.description].filter(Boolean).join('. ');
+      details.append(summary, explanation);
+      operations.append(details);
+    }
+  }
+} catch (error) { operations.textContent = error.message; }
+document.querySelector('#try').addEventListener('submit', async event => {
+  event.preventDefault();
+  const output = document.querySelector('#result');
+  const button = event.target.querySelector('button');
+  output.hidden = false;
+  button.disabled = true;
+  output.textContent = 'Sending…';
+  try {
+    const body = JSON.stringify(JSON.parse(document.querySelector('#body').value));
+    const response = await fetch('/api/doolla/v2/chat_poll', {method: 'POST', headers: {'Content-Type': 'application/json'}, body});
+    const text = response.ok ? JSON.stringify(await response.json(), null, 2) : await response.text();
+    output.textContent = response.status + ' ' + response.statusText + '\n' + text;
+  } catch (error) { output.textContent = error.message; }
+  finally { button.disabled = false; }
+});
+</script></body></html>

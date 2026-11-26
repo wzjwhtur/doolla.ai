@@ -1,0 +1,6 @@
+{
+  "tool_names": ["admin", "user"],
+  "tool_arguments": ["admin", "user"],
+  "tool_invocation_message_in_chat": ["admin", "user"],
+  "tool_error": ["admin", "user"]
+}

@@ -1,0 +1,82 @@
+[
+  {
+    "operation": "create",
+    "target_id": "first",
+    "component": {
+      "id": "first",
+      "type": "card",
+      "lifecycle": "create",
+      "children": [],
+      "visible": true,
+      "interactive": false,
+      "data": {
+        "name": "one"
+      }
+    },
+    "updates": null,
+    "position": null,
+    "batch_id": null
+  },
+  {
+    "operation": "update",
+    "target_id": "first",
+    "component": {
+      "id": "first",
+      "type": "card",
+      "lifecycle": "update",
+      "children": [],
+      "visible": false,
+      "interactive": false,
+      "data": {
+        "name": "one"
+      }
+    },
+    "updates": {
+      "visible": false
+    },
+    "position": null,
+    "batch_id": null
+  },
+  {
+    "operation": "replace",
+    "target_id": "first",
+    "component": {
+      "id": "first",
+      "type": "card",
+      "lifecycle": "create",
+      "children": [],
+      "visible": true,
+      "interactive": false,
+      "data": {
+        "name": "two"
+      }
+    },
+    "updates": null,
+    "position": null,
+    "batch_id": null
+  },
+  {
+    "operation": "replace",
+    "target_id": "first",
+    "component": {
+      "id": "second",
+      "type": "card",
+      "lifecycle": "create",
+      "children": [],
+      "visible": true,
+      "interactive": false,
+      "data": {}
+    },
+    "updates": null,
+    "position": null,
+    "batch_id": null
+  },
+  {
+    "operation": "remove",
+    "target_id": "second",
+    "component": null,
+    "updates": null,
+    "position": null,
+    "batch_id": null
+  }
+]

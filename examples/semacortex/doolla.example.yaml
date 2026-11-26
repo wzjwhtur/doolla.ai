@@ -1,0 +1,37 @@
+# SemaCortex master@3bdb085 的单数据源示例，适用于 doolla.ai v0.0.6+
+# 启动命令、密钥、Oracle 替换方法见同目录 README.md。
+listen: "127.0.0.1:8080"
+workdir: "./data/doolla/semacortex-mssql"
+history-dir: "./data/doolla/semacortex-mssql/conversations"
+# 接好用户身份后，若要向 user 组展示工具参数及错误，可启用上游的界面设置。
+# ui-features: "./examples/semacortex/ui-features.json"
+
+# 上游对话模型默认值。接本地兼容服务时同时修改地址、模型和输出上限。
+provider: openai
+model-url: "https://llm.example.com/v1"
+model: "Qwen/Qwen3.8-27B"
+openai-legacy-max-tokens: true
+max-output-tokens: 40960
+max-tool-iterations: 100
+# 模型密钥由 DOOLLA_API_KEY 提供。
+
+# 使用 doolla_mssql 驱动构建 doolla-db；DOOLLA_DSN 提供业务库连接串。
+database: mssql
+
+memory: milvus
+memory-url: "http://127.0.0.1:19535"
+memory-collection: "doolla_semacortex_mssql_bge_m3_1024"
+memory-provision: true
+# 启用 Milvus 鉴权时设置 DOOLLA_MEMORY_API_KEY。
+
+# 将上游默认的本地 BGE 模型通过兼容的 HTTP 服务提供给 Go。
+# 8010 是示例端口，请填写实际部署的基址和模型 ID。
+embed-url: "https://embeddings.example.com/v1"
+embed-model: "BAAI/bge-m3"
+embed-dim: 1024
+# 嵌入服务密钥由 DOOLLA_EMBED_API_KEY 提供。
+
+memory-text-limit: 150
+memory-text-threshold: 0.70
+memory-tool-limit: 100
+memory-tool-threshold: 0.75

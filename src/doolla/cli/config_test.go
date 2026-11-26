@@ -1,0 +1,1 @@
+../../../tests/_whitebox/cli/config_test.go
