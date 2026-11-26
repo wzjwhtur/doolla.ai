@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"doolla.ai/sdk/internal/i18n"
 )
 
 type User struct {
@@ -191,10 +193,16 @@ func (a *Agent) enter(ctx context.Context, key conversationKey) (func(), error) 
 
 // Chat publishes components as tools finish. Turns in one conversation are
 // serialized, while separate users and conversations can proceed concurrently.
-func (a *Agent) Chat(ctx context.Context, user User, id, question string, emit func(Component) error) (err error) {
+func (a *Agent) Chat(ctx context.Context, user User, id, question string, emit func(Component) error) error {
+	return a.chat(ctx, user, id, question, emit, nil)
+}
+
+func (a *Agent) chat(ctx context.Context, user User, id, question string, emit func(Component) error, outcome *turnOutcome) (err error) {
 	if user.ID == "" || id == "" || emit == nil {
 		return errors.New("user, conversation ID and component sink are required")
 	}
+	ctx = i18n.WithLocale(ctx, i18n.Resolve(i18n.Requested(ctx), "", a.config.DefaultLocale))
+	answerCtx := i18n.WithLocale(ctx, requestedAnswerLocale(question))
 	turn := Turn{Memory: a.config.Memory, Observability: a.config.Observability, Metadata: RequestMetadata(ctx), User: user, ConversationID: id, RequestID: newID()}
 	if requestID, _ := ctx.Value(requestIDKey{}).(string); requestID != "" {
 		turn.RequestID = requestID
@@ -231,9 +239,14 @@ func (a *Agent) Chat(ctx context.Context, user User, id, question string, emit f
 		return err
 	}
 	ctx = enriched
+	if outcome != nil {
+		ctx = context.WithValue(ctx, turnOutcomeKey{}, outcome)
+	}
 	start := time.Now()
 	defer func() { a.observe(ctx, Event{Operation: "message", Turn: turn, Duration: time.Since(start), Err: err}) }()
+	_, waitTrace := a.startSpan(ctx, "agent.conversation.wait", "agent.conversation.wait.duration", nil, nil)
 	leave, err := a.enter(ctx, conversationKey{user.ID, id})
+	waitTrace.end(err)
 	if err != nil {
 		return err
 	}
@@ -262,7 +275,7 @@ func (a *Agent) Chat(ctx context.Context, user User, id, question string, emit f
 	}
 	contextTask := newID()
 	if !a.config.HideProgress {
-		if err := emit(startTask(contextTask, "Load conversation context", "Message history and user context")); err != nil {
+		if err := emit(startTask(contextTask, i18n.T(ctx, "server.task.context"), i18n.T(ctx, "server.task.context_detail"))); err != nil {
 			return err
 		}
 	}
@@ -309,13 +322,17 @@ func (a *Agent) Chat(ctx context.Context, user User, id, question string, emit f
 		return err
 	}
 	if !a.config.HideProgress {
-		if err := emit(status("working", "Thinking…")); err != nil {
+		if err := emit(status("working", i18n.T(ctx, "server.status.thinking"))); err != nil {
 			return err
 		}
 	}
 	evidence := a.requiredEvidence(question, history)
+	var explicitSQL string
+	if a.config.DirectSQLResult && evidence.needRows {
+		explicitSQL = explicitSQLStatement(question)
+	}
 	if evidence.save != "" && !visibleTool(specs, evidence.save) {
-		return a.finishVerified(ctx, turn, conversation, messages, emit, noMemoryAccess, false)
+		return a.finishVerified(ctx, turn, conversation, messages, emit, i18n.T(answerCtx, "server.memory.no_access"), failedOutcome("memory_access_denied"))
 	}
 	memoryRead := a.config.VerifyToolAnswers && memoryReadRequest(question)
 	if memoryRead {
@@ -327,7 +344,7 @@ func (a *Agent) Chat(ctx context.Context, user User, id, question string, emit f
 		input := append([]Message{{Role: "system", Content: system}}, messages...)
 		var reply Message
 		focus := evidence.save
-		if evidence.needRows && !evidence.hasRows && (evidence.inspected || evidence.retried) {
+		if evidence.needRows && !evidence.hasQueryResult() && (evidence.inspected || evidence.retried) {
 			focus = "run_sql"
 			input = append(input, Message{Role: "user", Content: "The original question still needs live data. Call run_sql with the read query now, using the inspected columns. Do not answer from the catalog."})
 		}
@@ -350,29 +367,33 @@ func (a *Agent) Chat(ctx context.Context, user User, id, question string, emit f
 		a.config.Audit.response(ctx, turn, reply, a.model)
 		clarification := evidence.observeSQLAnswer(reply.Content)
 		if memoryRead && slices.ContainsFunc(reply.ToolCalls, func(c ToolCall) bool { return isMemoryWriteTool(c.Function.Name) }) {
-			return a.finishVerified(ctx, turn, conversation, messages, emit, "本次记忆读取未完成。", false)
+			return a.finishVerified(ctx, turn, conversation, messages, emit, i18n.T(answerCtx, "server.memory.incomplete"), failedOutcome("memory_recall_incomplete"))
 		}
 		if evidence.save != "" && len(reply.ToolCalls) > 0 && (len(reply.ToolCalls) != 1 || reply.ToolCalls[0].Function.Name != evidence.save) {
-			return a.finishVerified(ctx, turn, conversation, messages, emit, noMemoryWrite, false)
+			return a.finishVerified(ctx, turn, conversation, messages, emit, i18n.T(answerCtx, "server.memory.no_write"), failedOutcome("memory_write_unconfirmed"))
 		}
 		if len(reply.ToolCalls) == 0 && evidence.pending() && !clarification {
 			if evidence.save != "" {
-				return a.finishVerified(ctx, turn, conversation, messages, emit, noMemoryWrite, false)
+				return a.finishVerified(ctx, turn, conversation, messages, emit, i18n.T(answerCtx, "server.memory.no_write"), failedOutcome("memory_write_unconfirmed"))
 			}
-			if !evidence.retried && !evidence.attemptedSQL && focus == "" && round+1 < a.config.MaxToolIterations && visibleTool(specs, "run_sql") {
+			if !evidence.retried && len(evidence.queries) == 0 && focus == "" && round+1 < a.config.MaxToolIterations && visibleTool(specs, "run_sql") {
 				evidence.retried = true
 				continue
 			}
-			return a.finishVerified(ctx, turn, conversation, messages, emit, noQueryResult, false)
+			return a.finishVerified(ctx, turn, conversation, messages, emit, i18n.T(answerCtx, "server.query.no_result"), failedOutcome("query_result_unavailable"))
 		}
-		if len(reply.ToolCalls) == 0 && evidence.needRows && evidence.hasRows && !clarification {
-			if answer := evidence.scalar.answer(); answer != "" {
-				return a.finishVerified(ctx, turn, conversation, messages, emit, answer, true)
+		if len(reply.ToolCalls) == 0 && evidence.needRows && evidence.hasQueryResult() && !clarification {
+			if answer, partial := evidence.queryAnswer(answerCtx); answer != "" {
+				var outcome turnOutcome
+				if partial {
+					outcome = partialOutcome("query_partial")
+				}
+				return a.finishVerified(ctx, turn, conversation, messages, emit, answer, outcome)
 			}
 		}
 		unconfirmedSave := a.config.VerifyToolAnswers && evidence.unconfirmedMemoryClaim(question, reply.Content)
 		if len(reply.ToolCalls) == 0 && unconfirmedSave {
-			return a.finishVerified(ctx, turn, conversation, messages, emit, noMemoryWrite, false)
+			return a.finishVerified(ctx, turn, conversation, messages, emit, i18n.T(answerCtx, "server.memory.no_write"), failedOutcome("memory_write_unconfirmed"))
 		}
 		// Tool-call preambles reach both the UI and persisted history. Only
 		// publish SQL numbers and memory confirmations from completed tools.
@@ -388,11 +409,16 @@ func (a *Agent) Chat(ctx context.Context, user User, id, question string, emit f
 				return err
 			}
 			if truncated {
-				notice := "The model reached its output limit. Ask it to continue for the rest of the answer."
-				title := "Model output limit reached"
+				outcome := failedOutcome("model_response_incomplete")
+				if reply.Content != "" || evidence.hasQueryResult() {
+					outcome = partialOutcome("model_response_incomplete")
+				}
+				recordTurnOutcome(ctx, outcome)
+				notice := i18n.T(ctx, "server.status.model_limit_detail")
+				title := i18n.T(ctx, "server.status.model_limit")
 				if reply.FinishReason == "incomplete" {
-					title = "Incomplete model response"
-					notice = "The model stopped before finishing its response. Ask it to continue."
+					title = i18n.T(ctx, "server.status.model_incomplete")
+					notice = i18n.T(ctx, "server.status.model_incomplete_detail")
 				}
 				if !a.config.HideProgress {
 					if err := emit(status("warning", title)); err != nil {
@@ -407,7 +433,7 @@ func (a *Agent) Chat(ctx context.Context, user User, id, question string, emit f
 				return emit(Component{Type: "notification", Data: map[string]any{"level": "warning", "message": notice, "finish_reason": reply.FinishReason}, Simple: map[string]any{"type": "text", "text": notice}})
 			}
 			if !a.config.HideProgress {
-				if err := emit(status("success", "Ready")); err != nil {
+				if err := emit(status("success", i18n.T(ctx, "server.status.ready"))); err != nil {
 					return err
 				}
 			}
@@ -468,19 +494,30 @@ func (a *Agent) Chat(ctx context.Context, user User, id, question string, emit f
 				}
 			}
 		}
+		// An exact, single-statement request already has its final answer. The
+		// receipt uses the effective tool arguments after registry policy and hooks.
+		if explicitSQL != "" && len(reply.ToolCalls) == 1 && len(evidence.queries) == 1 &&
+			evidence.queries[0].hasResult && trimSQLTerminator(evidence.queries[0].statement) == explicitSQL {
+			if answer := evidence.scalar.answer(answerCtx); answer != "" {
+				return a.finishVerified(ctx, turn, conversation, messages, emit, answer, turnOutcome{})
+			}
+		}
 		if evidence.save != "" {
 			if evidence.receipt != "" {
-				return a.finishVerified(ctx, turn, conversation, messages, emit, "记忆已保存。", true)
+				return a.finishVerified(ctx, turn, conversation, messages, emit, i18n.T(answerCtx, "server.memory.saved"), turnOutcome{})
 			}
-			return a.finishVerified(ctx, turn, conversation, messages, emit, noMemoryWrite, false)
+			return a.finishVerified(ctx, turn, conversation, messages, emit, i18n.T(answerCtx, "server.memory.no_write"), failedOutcome("memory_write_unconfirmed"))
 		}
 	}
-	if evidence.needRows && !evidence.hasRows {
-		return a.finishVerified(ctx, turn, conversation, messages, emit, noQueryResult, false)
+	if evidence.needRows && !evidence.hasQueryResult() {
+		return a.finishVerified(ctx, turn, conversation, messages, emit, i18n.T(answerCtx, "server.query.no_result"), failedOutcome("query_result_unavailable"))
 	}
 	messageTrace.outcome("hit_tool_limit", true)
 	messageTrace.set("tool_iterations", a.config.MaxToolIterations)
 	messageTrace.set("incomplete_response", true)
+	if evidence.hasQueryResult() {
+		recordTurnOutcome(ctx, partialOutcome("tool_iteration_limit"))
+	}
 	if err := a.finishConversation(ctx, turn, conversation, messages, nil); err != nil {
 		return err
 	}
@@ -503,28 +540,32 @@ func (a *Agent) executeCall(ctx context.Context, turn Turn, call ToolCall, emit 
 		trace.outcome("success", false)
 		trace.end(errors.New(reason))
 		result, err := a.afterToolResult(ctx, turn, call, tool.Tool, ToolResult{Content: reason, Error: reason}, false)
+		if call.Function.Name == "run_sql" {
+			evidence.recordSQL(call, "", false, 0, false, "", &result)
+		}
 		return result, nil, err
 	}
 	var taskID string
 	if !a.config.HideProgress && slices.Contains(turn.UIFeatures, "tool_names") {
 		taskID = newID()
-		if err := emit(startTask(taskID, "Execute "+call.Function.Name, "")); err != nil {
+		if err := emit(startTask(taskID, i18n.T(ctx, "server.task.execute", call.Function.Name), "")); err != nil {
 			return ToolResult{}, nil, err
 		}
-		if err := emit(status("working", "Executing "+call.Function.Name)); err != nil {
+		if err := emit(status("working", i18n.T(ctx, "server.task.executing", call.Function.Name))); err != nil {
 			return ToolResult{}, nil, err
 		}
 	}
-	var showSQL bool
+	var isSQL bool
 	switch tool.Tool.(type) {
 	case SQLTool, *SQLTool:
-		showSQL = !a.config.HideProgress && slices.Contains(turn.UIFeatures, "sql_query")
+		isSQL = true
 	}
+	showSQL := isSQL && !a.config.HideProgress && slices.Contains(turn.UIFeatures, "sql_query")
 	if !showSQL && !a.config.HideProgress && slices.Contains(turn.UIFeatures, "tool_arguments") {
 		var args map[string]any
 		if json.Unmarshal([]byte(call.Function.Arguments), &args) == nil {
 			if err := emit(Component{Type: "status_card", Data: map[string]any{
-				"title": "Executing " + call.Function.Name, "status": "running", "metadata": args,
+				"title": i18n.T(ctx, "server.task.executing", call.Function.Name), "status": "running", "metadata": args,
 				"chat_section": "activity",
 			}}); err != nil {
 				return ToolResult{}, nil, err
@@ -533,20 +574,34 @@ func (a *Agent) executeCall(ctx context.Context, turn Turn, call ToolCall, emit 
 	}
 	var result ToolResult
 	args, err := a.prepareTool(ctx, turn, tool, call)
+	var statement string
 	if err == nil {
+		if isSQL || call.Function.Name == "run_sql" {
+			statement, _ = sqlStatement(args)
+		}
 		if showSQL {
-			if query, _ := sqlStatement(args); query != "" {
+			if statement != "" {
 				// Publish the statement passed to the SQL tool after argument transforms and hooks.
 				if err := emit(Component{Type: "sql_statement", Data: map[string]any{
-					"title": "生成的 SQL", "content": query, "code_language": "sql", "chat_section": "activity",
+					"title": i18n.T(ctx, "server.query.generated_sql"), "content": statement, "code_language": "sql", "chat_section": "activity", "tool_call_id": call.ID,
 				}}); err != nil {
 					return ToolResult{}, nil, err
 				}
 			}
 		}
-		result, err = a.runTool(ctx, turn, tool.Tool, call, args)
+		runCtx := ctx
+		if call.Function.Name == "visualize_data" {
+			runCtx = context.WithValue(ctx, queryResultsKey{}, evidence.queryResults())
+		}
+		result, err = a.runTool(runCtx, turn, tool.Tool, call, args)
 	}
 	evidence.record(call, result, err)
+	ran := err == nil && result.Error == ""
+	rowCount, returnedRows := result.Metadata["row_count"].(int)
+	var queryFile string
+	if isSQL && ran {
+		queryFile, _ = result.Metadata["output_file"].(string)
+	}
 	if err != nil {
 		result = failedToolResult(err)
 	}
@@ -554,9 +609,12 @@ func (a *Agent) executeCall(ctx context.Context, turn Turn, call ToolCall, emit 
 	if err != nil {
 		return ToolResult{}, nil, err
 	}
+	if isSQL || call.Function.Name == "run_sql" {
+		evidence.recordSQL(call, statement, ran, rowCount, returnedRows, queryFile, &result)
+	}
 	// 工具失败后模型可以继续重试。即使用户无权查看错误详情，聊天区也应保留本次调用的失败状态。
 	if result.Error != "" && result.Component == nil && slices.Contains(turn.UIFeatures, "tool_names") {
-		message := call.Function.Name + " 执行失败。"
+		message := i18n.T(ctx, "server.tool.failed", call.Function.Name)
 		result.Component = &Component{Type: "notification",
 			Data:   map[string]any{"level": "error", "message": message},
 			Simple: map[string]any{"type": "text", "text": message},

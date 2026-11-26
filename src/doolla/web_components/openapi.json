@@ -19,7 +19,7 @@
           "400": {"description": "Invalid chat request"},
           "401": {"description": "User resolution failed"},
           "409": {"description": "Request ID conflicts with a prior turn or its response is unavailable"},
-          "503": {"description": "Request cache is full"}
+          "503": {"description": "Request cache or active request limit reached"}
         }
       }
     },
@@ -32,7 +32,7 @@
           "400": {"description": "Invalid chat request"},
           "401": {"description": "User resolution failed"},
           "409": {"description": "Request ID conflicts with a prior turn or its response is unavailable"},
-          "503": {"description": "Request cache is full"}
+          "503": {"description": "Request cache or active request limit reached"}
         }
       }
     },
@@ -53,13 +53,15 @@
         "type": "object", "required": ["message"],
         "properties": {
           "message": {"type": "string"}, "conversation_id": {"type": "string"}, "request_id": {"type": "string"},
-          "metadata": {"type": "object", "additionalProperties": true}
+          "metadata": {"type": "object", "additionalProperties": true},
+          "locale": {"type": "string", "description": "Optional language tag. Supported locales are en and zh-CN."}
         }
       },
       "ChatChunk": {
         "type": "object", "required": ["rich", "simple", "conversation_id", "request_id", "timestamp"],
         "properties": {
-          "rich": {"type": "object"}, "simple": {"type": ["object", "null"]},
+          "rich": {"type": "object", "description": "The last chat chunk is turn_outcome. Its data.status is succeeded, partial, or failed, and data.code may give a reason."},
+          "simple": {"type": ["object", "null"]},
           "conversation_id": {"type": "string"}, "request_id": {"type": "string"}, "timestamp": {"type": "number"}
         }
       },

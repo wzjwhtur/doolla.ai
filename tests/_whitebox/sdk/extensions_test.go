@@ -52,6 +52,15 @@ func TestTextAndToolMemoryRecall(t *testing.T) {
 				t.Fatal(store.query)
 			}
 		}
+		for _, tc := range []struct{ locale, message string }{
+			{"en", "Found 0 similar tool usage patterns."},
+			{"zh-CN", "找到 0 条相似的工具调用记录。"},
+		} {
+			result, err := tool.Tool.Run(WithLocale(t.Context(), tc.locale), User{}, json.RawMessage(`{"question":"shift"}`))
+			if err != nil || result.Component == nil || result.Component.Data["message"] != tc.message {
+				t.Fatalf("unexpected search status for %s: %+v %v", tc.locale, result.Component, err)
+			}
+		}
 		return
 	}
 	t.Fatal("missing memory search tool")

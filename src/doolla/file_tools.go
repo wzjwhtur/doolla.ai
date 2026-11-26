@@ -11,6 +11,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/pmezard/go-difflib/difflib"
+
+	"doolla.ai/sdk/internal/i18n"
 )
 
 type fileEdit struct {
@@ -84,13 +86,13 @@ func FileTools(storage FileToolStorage) []Registration {
 				if err != nil {
 					return ToolResult{}, err
 				}
-				return fileListResult("Files", names)
+				return fileListResult(i18n.T(ctx, "server.file.list"), names)
 			case "read_file":
 				text, err := storage.ReadFile(ctx, u, args.Filename)
 				if err != nil {
 					return ToolResult{}, err
 				}
-				return ToolResult{Content: text, Component: &Component{Type: "card", Data: map[string]any{"title": "Contents of " + args.Filename, "content": text}, Simple: plainToolText(text)}}, nil
+				return ToolResult{Content: text, Component: &Component{Type: "card", Data: map[string]any{"title": i18n.T(ctx, "server.file.contents", args.Filename), "content": text}, Simple: plainToolText(text)}}, nil
 			case "search_files":
 				query := strings.TrimSpace(args.Query)
 				if query == "" || args.MaxResults < 1 || args.MaxResults > 100 {
@@ -100,12 +102,12 @@ func FileTools(storage FileToolStorage) []Registration {
 				if err != nil {
 					return ToolResult{}, err
 				}
-				return fileListResult("Search results", matches)
+				return fileListResult(i18n.T(ctx, "server.file.search"), matches)
 			case "write_file":
 				if err := storage.WriteFile(ctx, u, args.Filename, args.Content, args.Overwrite); err != nil {
 					return ToolResult{}, err
 				}
-				return fileSaved(args.Filename), nil
+				return fileSaved(ctx, args.Filename), nil
 			case "edit_file":
 				return applyFileEdits(ctx, storage, u, args)
 			}
@@ -127,15 +129,15 @@ func applyFileEdits(ctx context.Context, storage FileToolStorage, u User, args f
 		return ToolResult{}, err
 	}
 	if before == after {
-		msg := fmt.Sprintf("No changes applied to '%s' (content already up to date).", args.Filename)
+		msg := i18n.T(ctx, "server.file.no_changes", args.Filename)
 		return ToolResult{Content: msg, Component: &Component{Type: "notification", Data: map[string]any{"level": "info", "message": msg}, Simple: plainToolText(msg)}}, nil
 	}
 	diff, err := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{A: difflib.SplitLines(before), B: difflib.SplitLines(after), FromFile: "a/" + args.Filename, ToFile: "b/" + args.Filename, Context: 3})
 	if err != nil {
 		return ToolResult{}, err
 	}
-	summary := fmt.Sprintf("Updated '%s' with %d edit(s).", args.Filename, len(args.Edits))
-	return ToolResult{Content: summary + "\n\n" + diff, Component: &Component{Type: "card", Data: map[string]any{"title": "Edited " + args.Filename, "content": diff}, Simple: plainToolText(summary)}}, nil
+	summary := i18n.T(ctx, "server.file.updated", args.Filename, len(args.Edits))
+	return ToolResult{Content: summary + "\n\n" + diff, Component: &Component{Type: "card", Data: map[string]any{"title": i18n.T(ctx, "server.file.edited", args.Filename), "content": diff}, Simple: plainToolText(summary)}}, nil
 }
 
 func editLines(text string, edits []fileEdit) (string, error) {
@@ -190,6 +192,6 @@ func fileListResult(title string, v any) (ToolResult, error) {
 	result.Component = &Component{Type: "card", Data: map[string]any{"title": title, "content": result.Content}, Simple: plainToolText(result.Content)}
 	return result, nil
 }
-func fileSaved(name string) ToolResult {
-	return ToolResult{Content: "File saved.", Component: &Component{Type: "notification", Data: map[string]any{"level": "success", "message": "File saved."}, Simple: plainToolText("Saved " + name)}}
+func fileSaved(ctx context.Context, name string) ToolResult {
+	return ToolResult{Content: i18n.T(ctx, "server.file.saved"), Component: &Component{Type: "notification", Data: map[string]any{"level": "success", "message": i18n.T(ctx, "server.file.saved")}, Simple: plainToolText(i18n.T(ctx, "server.file.saved_name", name))}}
 }

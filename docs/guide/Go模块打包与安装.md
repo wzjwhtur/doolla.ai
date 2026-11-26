@@ -41,6 +41,13 @@ mkdir -p "$HOME/.local/bin"
 GOBIN="$HOME/.local/bin" go -C "$doolla_dir/src/doolla" install ./cmd/doolla
 ```
 
+如需修改翻译并重建网页，可在解包目录编辑 `src/doolla/internal/i18n/catalog/` 中的中英文 JSON，然后用 Node.js 和 npm 执行以下命令。网页构建会重新生成浏览器翻译和内嵌资源。重建后再次安装服务命令即可使用新资源。
+
+```sh
+npm --prefix "$doolla_dir/src/doolla/web_components" ci
+npm --prefix "$doolla_dir/src/doolla/web_components" run build
+```
+
 通用服务通过启动参数选择数据源和模型。例如，使用已有的 SQLite 数据库和本机 Ollama：
 
 ```sh
@@ -60,6 +67,8 @@ GOBIN="$HOME/.local/bin" go -C "$doolla_dir/src/doolla" install ./cmd/doolla
 ```sh
 ./scripts/release-go.sh "${version:?请先设置待发布版本号}"
 ```
+
+发行脚本先从独立解包目录编译服务，验证发行包包含构建所需的源码和内嵌资源。macOS 安装器使用这一步构建出的二进制。
 
 | 使用者 | 分发文件 | 安装方式 |
 | --- | --- | --- |

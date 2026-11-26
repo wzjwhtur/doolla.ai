@@ -45,7 +45,7 @@ func (e *turnEvidence) observeSQLAnswer(content string) bool {
 	if e.watchSQL && scopeQuestion.MatchString(strings.TrimSpace(content)) && !queryClaim.MatchString(content) && !measuredValue.MatchString(content) {
 		return true
 	}
-	if !e.watchSQL || e.hasRows {
+	if !e.watchSQL || e.hasQueryResult() {
 		return false
 	}
 	// Inspect the proposed answer too. KPI names and abbreviations are open

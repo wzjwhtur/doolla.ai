@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"math"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"doolla.ai/sdk/internal/i18n"
 )
 
 type VisualizationTool struct{ Artifacts ResultFiles }
@@ -28,22 +31,80 @@ func (t VisualizationTool) WithGenerator(generate func([][]string, string) (map[
 }
 
 func (t VisualizationTool) Spec() ToolSpec {
-	return ToolSpec{"visualize_data", "Create a Plotly chart from a query result CSV.", objectSchema(map[string]any{"filename": strField("Result CSV filename"), "title": strField("Chart title")}, "filename")}
+	return ToolSpec{"visualize_data", "Create a Plotly chart from a query result. Omit the source when this turn has one result; select its result_id when there are multiple results.",
+		objectSchema(map[string]any{
+			"result_id": strField("Query result ID returned by run_sql in this turn, e.g. result_2"),
+			"filename":  strField("Exact existing CSV filename, for charting a file directly"),
+			"title":     strField("Chart title"),
+		})}
 }
+
 func (t VisualizationTool) Run(ctx context.Context, u User, raw json.RawMessage) (ToolResult, error) {
-	return t.run(ctx, u, raw, PlotlyFigure)
+	return t.run(ctx, u, raw, func(rows [][]string, title string) (map[string]any, error) {
+		return plotlyFigure(ctx, rows, title)
+	})
+}
+
+type visualizationArgs struct {
+	ResultID string `json:"result_id"`
+	Filename string `json:"filename"`
+	Title    string `json:"title"`
+}
+
+func (args visualizationArgs) source(ctx context.Context, results []queryResultArtifact) (string, error) {
+	if args.ResultID != "" {
+		if args.Filename != "" {
+			return "", errors.New(i18n.T(ctx, "server.chart.exclusive"))
+		}
+		for _, result := range results {
+			if result.id == args.ResultID {
+				return result.filename, nil
+			}
+		}
+		return "", errors.New(i18n.T(ctx, "server.chart.unknown_id", strconv.Quote(args.ResultID)) + queryResultChoices(ctx, results))
+	}
+	if args.Filename != "" {
+		return args.Filename, nil
+	}
+	switch len(results) {
+	case 0:
+		return "", errors.New(i18n.T(ctx, "server.chart.no_result"))
+	case 1:
+		return results[0].filename, nil
+	default:
+		return "", errors.New(i18n.T(ctx, "server.chart.multiple") + queryResultChoices(ctx, results))
+	}
+}
+
+func queryResultChoices(ctx context.Context, results []queryResultArtifact) string {
+	if len(results) == 0 {
+		return ""
+	}
+	ids := make([]string, len(results))
+	for i, result := range results {
+		ids[i] = result.id
+	}
+	return i18n.T(ctx, "server.chart.choices", strings.Join(ids, ", "))
 }
 
 func (t VisualizationTool) run(ctx context.Context, u User, raw json.RawMessage, generate func([][]string, string) (map[string]any, error)) (ToolResult, error) {
-	var args struct{ Filename, Title string }
+	var args visualizationArgs
 	if err := json.Unmarshal(raw, &args); err != nil {
+		return ToolResult{}, err
+	}
+	results, _ := ctx.Value(queryResultsKey{}).([]queryResultArtifact)
+	filename, err := args.source(ctx, results)
+	if err != nil {
 		return ToolResult{}, err
 	}
 	if t.Artifacts == nil {
 		t.Artifacts = Artifacts{Directory: "."}
 	}
-	data, err := t.Artifacts.Read(u, args.Filename)
+	data, err := t.Artifacts.Read(u, filename)
 	if err != nil {
+		if args.Filename != "" && len(results) != 0 && errors.Is(err, fs.ErrNotExist) {
+			err = fmt.Errorf("%w.%s", err, queryResultChoices(ctx, results))
+		}
 		return ToolResult{}, err
 	}
 	rows, err := csv.NewReader(strings.NewReader(string(data))).ReadAll()
@@ -51,29 +112,33 @@ func (t VisualizationTool) run(ctx context.Context, u User, raw json.RawMessage,
 		return ToolResult{}, err
 	}
 	if args.Title == "" {
-		args.Title = "Visualization of " + args.Filename
+		args.Title = i18n.T(ctx, "server.chart.default_title", filename)
 	}
 	if len(rows) < 2 || len(rows[0]) == 0 {
-		return ToolResult{}, errors.New("cannot visualize an empty data set")
+		return ToolResult{}, errors.New(i18n.T(ctx, "server.chart.empty"))
 	}
 	chart, err := generate(rows, args.Title)
 	if err != nil {
 		return ToolResult{}, err
 	}
 	if chart == nil {
-		return ToolResult{}, errors.New("chart generator returned no figure")
+		return ToolResult{}, errors.New(i18n.T(ctx, "server.chart.empty_figure"))
 	}
 	dataFields := maps.Clone(chart)
 	dataFields["chart_type"] = "plotly"
 	dataFields["title"] = args.Title
-	dataFields["config"] = map[string]any{"data_shape": map[string]int{"rows": len(rows) - 1, "columns": len(rows[0])}, "source_file": args.Filename}
-	summary := fmt.Sprintf("Created visualization of %d rows from %s.", len(rows)-1, args.Filename)
-	return ToolResult{Content: summary, Component: &Component{Type: "chart", Data: dataFields, Simple: plainToolText(summary)}, Metadata: map[string]any{"filename": args.Filename, "rows": len(rows) - 1, "columns": len(rows[0]), "chart": chart}}, nil
+	dataFields["config"] = map[string]any{"data_shape": map[string]int{"rows": len(rows) - 1, "columns": len(rows[0])}, "source_file": filename}
+	summary := i18n.T(ctx, "server.chart.created", len(rows)-1, filename)
+	return ToolResult{Content: summary, Component: &Component{Type: "chart", Data: dataFields, Simple: plainToolText(summary)}, Metadata: map[string]any{"filename": filename, "rows": len(rows) - 1, "columns": len(rows[0]), "chart": chart}}, nil
 }
 
 // PlotlyFigure creates the same chart families as the Python chart generator.
 // Input includes a CSV header in the first row.
 func PlotlyFigure(rows [][]string, title string) (map[string]any, error) {
+	return plotlyFigure(context.Background(), rows, title)
+}
+
+func plotlyFigure(ctx context.Context, rows [][]string, title string) (map[string]any, error) {
 	if len(rows) < 2 || len(rows[0]) == 0 {
 		return nil, errors.New("cannot visualize an empty data set")
 	}
@@ -128,13 +193,13 @@ func PlotlyFigure(rows [][]string, title string) (map[string]any, error) {
 	case len(names) >= 4:
 		traces = append(traces, map[string]any{"type": "table", "header": map[string]any{"values": names}, "cells": map[string]any{"values": cols}})
 	case len(dates) > 0 && len(numeric) > 0:
-		axes(names[dates[0]], "Value")
+		axes(names[dates[0]], i18n.T(ctx, "server.chart.value"))
 		layout["hovermode"] = "x unified"
 		for _, n := range numeric {
 			traces = append(traces, map[string]any{"type": "scatter", "mode": "lines", "name": names[n], "x": cols[dates[0]], "y": cols[n]})
 		}
 	case len(numeric) == 1 && len(category) == 0:
-		axes(names[numeric[0]], "Count")
+		axes(names[numeric[0]], i18n.T(ctx, "server.chart.count"))
 		layout["showlegend"] = false
 		traces = append(traces, map[string]any{"type": "histogram", "x": cols[numeric[0]]})
 	case len(numeric) == 1 && len(category) == 1:

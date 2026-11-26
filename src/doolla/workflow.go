@@ -3,10 +3,11 @@ package doolla
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"slices"
 	"strings"
 	"time"
+
+	"doolla.ai/sdk/internal/i18n"
 )
 
 func (a *Agent) workflow(ctx context.Context, t Turn, q string, tools []ToolSpec, emit func(Component) error) (bool, error) {
@@ -17,7 +18,7 @@ func (a *Agent) workflow(ctx context.Context, t Turn, q string, tools []ToolSpec
 	for _, spec := range tools {
 		names = append(names, spec.Name)
 	}
-	setup := toolSetup(names)
+	setup := toolSetup(ctx, names)
 	admin := slices.Contains(t.User.Groups, "admin")
 	cmd := strings.ToLower(strings.TrimSpace(q))
 	switch cmd {
@@ -27,25 +28,25 @@ func (a *Agent) workflow(ctx context.Context, t Turn, q string, tools []ToolSpec
 		}
 		if !admin {
 			if !setup[0].available {
-				return true, emit(textComponent("Setup required. Connect a database to ask questions about your data."))
+				return true, emit(textComponent(i18n.T(ctx, "server.setup.needs_database")))
 			}
-			return true, emit(textComponent("Welcome to Doolla AI. Ask a question about your data, or type /help."))
+			return true, emit(textComponent(i18n.T(ctx, "server.welcome")))
 		}
-		title := "Admin: System Ready"
+		title := i18n.T(ctx, "server.setup.admin_ready")
 		if !setup[0].available {
-			title = "Admin: Setup Required"
+			title = i18n.T(ctx, "server.setup.admin_required")
 		}
-		content := "**🔒 Admin View**\n\n**Setup:** " + setup.summary()
-		actions := []map[string]string{{"label": "Help", "action": "/help", "variant": "secondary"}}
+		content := i18n.T(ctx, "server.setup.admin_intro") + setup.summary(ctx)
+		actions := []map[string]string{{"label": i18n.T(ctx, "server.help.button"), "action": "/help", "variant": "secondary"}}
 		if setup[1].available {
-			content += "\n\n**Memory Management** — As an admin you can review and delete saved memories."
-			actions = append(actions, map[string]string{"label": "View memories", "action": "/memories", "variant": "secondary"})
+			content += i18n.T(ctx, "server.memory.admin_intro")
+			actions = append(actions, map[string]string{"label": i18n.T(ctx, "server.memory.view"), "action": "/memories", "variant": "secondary"})
 		}
 		return true, emit(Component{Type: "card", Data: map[string]any{"title": title, "content": content, "actions": actions, "markdown": true}})
 	case "help", "/h", "/help":
-		help := "Ask a question about your data or request a chart. Type /help for available commands."
+		help := i18n.T(ctx, "server.help.body")
 		if admin {
-			help += " Admin Commands: /status, /memories and /delete <id>."
+			help += i18n.T(ctx, "server.help.admin")
 		}
 		return true, emit(textComponent(help))
 	case "/delete", "status", "/status", "memories", "/memories", "/recent_memories", "recent_memories":
@@ -55,10 +56,10 @@ func (a *Agent) workflow(ctx context.Context, t Turn, q string, tools []ToolSpec
 		}
 	}
 	if !admin {
-		return true, emit(textComponent("Access Denied. This command is available only to administrators."))
+		return true, emit(textComponent(i18n.T(ctx, "server.error.admin_only")))
 	}
 	if cmd == "status" || cmd == "/status" {
-		if err := emit(textComponent("## Setup Status Report\n\n" + setup.summary() + "\n\nAvailable tools: " + strings.Join(names, ", "))); err != nil {
+		if err := emit(textComponent(i18n.T(ctx, "server.setup.report") + setup.summary(ctx) + i18n.T(ctx, "server.setup.tools") + strings.Join(names, ", "))); err != nil {
 			return true, err
 		}
 		for _, item := range setup {
@@ -66,17 +67,17 @@ func (a *Agent) workflow(ctx context.Context, t Turn, q string, tools []ToolSpec
 			if item.available {
 				state = "success"
 			}
-			if err := emit(Component{Type: "status_card", Data: map[string]any{"title": item.name, "status": state, "description": item.description()}}); err != nil {
+			if err := emit(Component{Type: "status_card", Data: map[string]any{"title": item.name, "status": state, "description": item.description(ctx)}}); err != nil {
 				return true, err
 			}
 		}
 		return true, nil
 	}
 	if a.config.Memory == nil {
-		return true, emit(textComponent("No Memory System. Configure agent memory to use this command."))
+		return true, emit(textComponent(i18n.T(ctx, "server.memory.not_configured")))
 	}
 	if cmd == "/delete" {
-		return true, emit(textComponent("Invalid Command. Usage: /delete [memory_id]"))
+		return true, emit(textComponent(i18n.T(ctx, "server.memory.delete_usage")))
 	}
 	if strings.HasPrefix(cmd, "/delete ") {
 		id := strings.TrimSpace(strings.TrimSpace(q)[len("/delete "):])
@@ -86,10 +87,10 @@ func (a *Agent) workflow(ctx context.Context, t Turn, q string, tools []ToolSpec
 				return true, err
 			}
 			if ok {
-				return true, emit(textComponent("Memory Deleted — " + id))
+				return true, emit(textComponent(i18n.T(ctx, "server.memory.deleted", id)))
 			}
 		}
-		return true, emit(textComponent("Memory Not Found."))
+		return true, emit(textComponent(i18n.T(ctx, "server.memory.not_found")))
 	}
 	var all []MemoryEntry
 	for _, kind := range []string{"tool", "text"} {
@@ -100,34 +101,34 @@ func (a *Agent) workflow(ctx context.Context, t Turn, q string, tools []ToolSpec
 		all = append(all, items...)
 	}
 	if len(all) == 0 {
-		return true, emit(textComponent("No recent memories found."))
+		return true, emit(textComponent(i18n.T(ctx, "server.memory.no_recent")))
 	}
-	if err := emit(textComponent(fmt.Sprintf("Recent Memories (%d)", len(all)))); err != nil {
+	if err := emit(textComponent(i18n.T(ctx, "server.memory.recent", len(all)))); err != nil {
 		return true, err
 	}
 	previous := ""
 	for _, m := range all {
 		if m.Kind != previous {
-			section := "Text Memories"
+			section := i18n.T(ctx, "server.memory.text_section")
 			if m.Kind == "tool" {
-				section = "Tool Memories"
+				section = i18n.T(ctx, "server.memory.tool_section")
 			}
 			if err := emit(textComponent("## " + section)); err != nil {
 				return true, err
 			}
 			previous = m.Kind
 		}
-		title, body := "Text memory", m.Content
+		title, body := i18n.T(ctx, "server.memory.text_title"), m.Content
 		if m.Kind == "tool" {
-			title = "Tool: " + m.ToolName
+			title = i18n.T(ctx, "server.memory.tool_title", m.ToolName)
 			args, err := json.Marshal(m.Args)
 			if err != nil {
 				return true, err
 			}
-			body = fmt.Sprintf("Question: %s\n\nArguments: %s\n\nSuccess: %t", m.Question, args, m.Success)
+			body = i18n.T(ctx, "server.memory.tool_details", m.Question, string(args), m.Success)
 		}
-		body += "\n\nSaved: " + m.Timestamp.Format(time.RFC3339) + "\n\nID: " + m.ID
-		card := Component{Type: "card", Data: map[string]any{"title": title, "content": body, "actions": []map[string]string{{"label": "Delete", "action": "/delete " + m.ID, "variant": "error"}}}}
+		body += i18n.T(ctx, "server.memory.saved_details", m.Timestamp.Format(time.RFC3339), m.ID)
+		card := Component{Type: "card", Data: map[string]any{"title": title, "content": body, "actions": []map[string]string{{"label": i18n.T(ctx, "server.memory.delete"), "action": "/delete " + m.ID, "variant": "error"}}}}
 		if err := emit(card); err != nil {
 			return true, err
 		}
@@ -141,23 +142,23 @@ type capabilityStatus struct {
 	guidance  string
 }
 
-func (s capabilityStatus) description() string {
+func (s capabilityStatus) description(ctx context.Context) string {
 	if s.available {
-		return "Available"
+		return i18n.T(ctx, "server.setup.available")
 	}
 	return s.guidance
 }
 
 type setupReport []capabilityStatus
 
-func (s setupReport) summary() string {
+func (s setupReport) summary(ctx context.Context) string {
 	var text []string
 	for _, item := range s {
-		text = append(text, item.name+" — "+item.description())
+		text = append(text, item.name+" — "+item.description(ctx))
 	}
 	return strings.Join(text, "\n\n")
 }
-func toolSetup(names []string) setupReport {
+func toolSetup(ctx context.Context, names []string) setupReport {
 	has := func(aliases ...string) bool {
 		for _, a := range aliases {
 			if slices.Contains(names, a) {
@@ -167,9 +168,9 @@ func toolSetup(names []string) setupReport {
 		return false
 	}
 	return setupReport{
-		{"SQL connection", has("run_sql", "sql_query", "execute_sql", "query_sql"), "Register a SQL runner to query data."},
-		{"Memory system", has("search_saved_correct_tool_uses") && has("save_question_tool_args"), "Register the memory search and save tools to reuse successful queries."},
-		{"Visualization", has("visualize_data", "create_chart", "plot_data", "generate_chart"), "Register a visualization tool to create charts."},
-		{"Calculator", has("calculator", "calc", "calculate"), "No calculator registered."},
+		{i18n.T(ctx, "server.setup.sql"), has("run_sql", "sql_query", "execute_sql", "query_sql"), i18n.T(ctx, "server.setup.sql_help")},
+		{i18n.T(ctx, "server.setup.memory"), has("search_saved_correct_tool_uses") && has("save_question_tool_args"), i18n.T(ctx, "server.setup.memory_help")},
+		{i18n.T(ctx, "server.setup.charts"), has("visualize_data", "create_chart", "plot_data", "generate_chart"), i18n.T(ctx, "server.setup.charts_help")},
+		{i18n.T(ctx, "server.setup.calc"), has("calculator", "calc", "calculate"), i18n.T(ctx, "server.setup.calc_help")},
 	}
 }

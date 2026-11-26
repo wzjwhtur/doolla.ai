@@ -64,7 +64,7 @@ func TestScalarAnswersUseCurrentSQLCells(t *testing.T) {
 			}
 			u := doolla.User{ID: "viewer"}
 			var answer string
-			if err := a.Chat(t.Context(), u, "chat", "请查询工单数据", func(c doolla.Component) error {
+			if err := a.Chat(doolla.WithLocale(t.Context(), "zh-CN"), u, "chat", "请查询工单数据", func(c doolla.Component) error {
 				if c.Type == "text" {
 					answer, _ = c.Data["content"].(string)
 				}

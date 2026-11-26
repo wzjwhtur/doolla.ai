@@ -224,7 +224,9 @@ func TestChatTransports(t *testing.T) {
 	}
 	err = json.NewDecoder(resp.Body).Decode(&poll)
 	resp.Body.Close()
-	if err != nil || poll.Total != len(poll.Chunks) || poll.Total < 2 || poll.Chunks[len(poll.Chunks)-1].Rich["data"].(map[string]any)["content"] != "Total is 10." {
+	if err != nil || poll.Total != len(poll.Chunks) || poll.Total < 3 ||
+		poll.Chunks[poll.Total-1].Rich["type"] != "turn_outcome" ||
+		poll.Chunks[poll.Total-2].Rich["data"].(map[string]any)["content"] != "Total is 10." {
 		t.Fatal(poll, err)
 	}
 	resp, err = client.Post(srv.URL+"/api/doolla/v2/chat_sse", "application/json", strings.NewReader(body))

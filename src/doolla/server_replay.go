@@ -10,6 +10,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"doolla.ai/sdk/internal/i18n"
 )
 
 // ReplayOptions bounds in-process chat request deduplication. A full table
@@ -17,8 +19,11 @@ import (
 // the byte budgets are delivered to the original caller and leave a marker
 // that prevents another execution until expiry.
 type ReplayOptions struct {
-	Retention        time.Duration
-	MaxEntries       int
+	Retention  time.Duration
+	MaxEntries int
+	// MaxInFlight limits new executions separately from retained request IDs.
+	// Zero uses MaxEntries. Existing requests can still be replayed at the limit.
+	MaxInFlight      int
 	MaxBytes         int
 	MaxResponseBytes int
 }
@@ -26,15 +31,17 @@ type ReplayOptions struct {
 type replayProblem struct {
 	status int
 	reason string
+	key    string
 }
 
 func (e *replayProblem) Error() string { return e.reason }
 
 var (
-	errRequestConflict    = &replayProblem{http.StatusConflict, "Request ID already used for a different request or authorization context"}
-	errRequestInterrupted = &replayProblem{http.StatusConflict, "The original request was interrupted. Its actions may already have completed"}
-	errReplayTooLarge     = &replayProblem{http.StatusConflict, "The original response exceeds the replay budget. The request has already been processed"}
-	errReplayFull         = &replayProblem{http.StatusServiceUnavailable, "The request cache is full. Retry later"}
+	errRequestConflict    = &replayProblem{http.StatusConflict, "Request ID already used for a different request or authorization context", "server.error.request_conflict"}
+	errRequestInterrupted = &replayProblem{http.StatusConflict, "The original request was interrupted. Its actions may already have completed", "server.error.request_interrupted"}
+	errReplayTooLarge     = &replayProblem{http.StatusConflict, "The original response exceeds the replay budget. The request has already been processed", "server.error.replay_too_large"}
+	errReplayFull         = &replayProblem{http.StatusServiceUnavailable, "The request cache is full. Retry later", "server.error.replay_full"}
+	errReplayBusy         = &replayProblem{http.StatusServiceUnavailable, "Too many active chat requests. Retry later", "server.error.replay_busy"}
 )
 
 // Keys and fingerprints have fixed size regardless of supplied metadata or IDs.
@@ -63,6 +70,9 @@ func newRequestReplay(o ReplayOptions) *requestReplay {
 	}
 	if o.MaxEntries <= 0 {
 		o.MaxEntries = 4096
+	}
+	if o.MaxInFlight <= 0 {
+		o.MaxInFlight = o.MaxEntries
 	}
 	if o.MaxBytes <= 0 {
 		o.MaxBytes = 64 << 20
@@ -127,6 +137,9 @@ func (c *requestReplay) reserve(u User, req *ChatRequest) (*replayEntry, bool, e
 	if len(c.entries) >= c.options.MaxEntries {
 		return nil, false, errReplayFull
 	}
+	if len(c.entries)-c.completed.Len() >= c.options.MaxInFlight {
+		return nil, false, errReplayBusy
+	}
 	e := &replayEntry{key: key, fingerprint: hash, done: make(chan struct{})}
 	if req.ConversationID == "" {
 		req.ConversationID = "conv_" + newID()
@@ -166,7 +179,15 @@ func (c *requestReplay) finish(e *replayEntry, complete bool) {
 	close(e.done)
 }
 
-func (s *Server) deliver(ctx context.Context, u User, req ChatRequest, e *replayEntry, owner bool, send func(json.RawMessage) error) error {
+func (s *Server) deliver(ctx context.Context, u User, req ChatRequest, e *replayEntry, owner bool, transport string, send func(json.RawMessage) error) (err error) {
+	observer := s.agent.config.Observability
+	if observer != nil {
+		var trace operationTrace
+		ctx, trace = s.agent.startSpan(ctx, "server.chat.deliver", "server.chat.duration", map[string]any{"request_id": req.RequestID},
+			map[string]string{"transport": transport})
+		trace.outcome("replay", !owner)
+		defer func() { trace.end(err) }()
+	}
 	if !owner {
 		select {
 		case <-ctx.Done():
@@ -186,7 +207,9 @@ func (s *Server) deliver(ctx context.Context, u User, req ChatRequest, e *replay
 	complete := false
 	defer func() { s.replay.finish(e, complete) }()
 	var outputErr error
-	err := s.stream(ctx, u, req, func(chunk Chunk) error {
+	var firstChunk, firstAnswer bool
+	started := time.Now()
+	err = s.stream(ctx, u, req, func(chunk Chunk) error {
 		if outputErr != nil {
 			return outputErr
 		}
@@ -194,6 +217,24 @@ func (s *Server) deliver(ctx context.Context, u User, req ChatRequest, e *replay
 		if err == nil {
 			s.replay.record(e, raw)
 			err = send(raw)
+		}
+		if err == nil && observer != nil {
+			elapsed := float64(time.Since(started)) / float64(time.Millisecond)
+			if !firstChunk {
+				firstChunk = true
+				observer.RecordMetric(ctx, "server.chat.first_chunk.duration", elapsed, "ms", map[string]string{"transport": transport})
+			}
+			data, _ := chunk.Rich["data"].(map[string]any)
+			switch chunk.Rich["type"] {
+			case "text":
+				if !firstAnswer && data["chat_section"] != "activity" {
+					firstAnswer = true
+					observer.RecordMetric(ctx, "server.chat.first_answer.duration", elapsed, "ms", map[string]string{"transport": transport})
+				}
+			case "turn_outcome":
+				status, _ := data["status"].(string)
+				observer.RecordMetric(ctx, "server.chat.outcome.count", 1, "count", map[string]string{"transport": transport, "status": status})
+			}
 		}
 		outputErr = err
 		return err
@@ -211,10 +252,10 @@ func replayStatus(err error) int {
 	}
 	return http.StatusInternalServerError
 }
-func replayErrorText(err error) string {
+func replayErrorText(ctx context.Context, err error) string {
 	var p *replayProblem
 	if errors.As(err, &p) {
-		return p.reason
+		return i18n.T(ctx, p.key)
 	}
-	return "The request could not be completed"
+	return i18n.T(ctx, "server.error.request_incomplete")
 }

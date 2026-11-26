@@ -47,6 +47,34 @@ async function testSse() {
   }
 }
 
+async function testTurnOutcome() {
+  for (const [status, poll] of [['succeeded', false], ['failed', false], ['partial', true]] as const) {
+    const code = status === 'failed' ? 'processing_error' : status === 'partial' ? 'query_partial' : undefined;
+    const terminal = { ...frame('terminal'), rich: { type: 'turn_outcome', id: 'terminal', data: { status, code } } };
+    window.fetch = async (url, init) => {
+      if (JSON.parse(String(init?.body)).metadata?.starter_ui_request) return new Response('data: [DONE]\n\n');
+      const chunks = [frame('Completed work'), terminal];
+      if (String(url).endsWith('chat_poll')) return Response.json({ chunks });
+      if (poll) return new Response('', { status: 503 });
+      return new Response(chunks.map(chunk => 'data: ' + JSON.stringify(chunk) + '\n\n').join('') + 'data: [DONE]\n\n');
+    };
+    const chat = new DoollaChat();
+    document.body.append(chat);
+    try {
+      await chat.updateComplete;
+      const outcomes: CustomEvent[] = [];
+      chat.addEventListener('turn-completed', event => outcomes.push(event as CustomEvent));
+      check(await chat.sendMessage('question') === (status === 'succeeded'), 'business outcome return value');
+      check(outcomes.length === 1 && outcomes[0].detail.status === status && outcomes[0].detail.code === code,
+        'business outcome event after the response ends');
+      check(chat.shadowRoot!.querySelector('[data-component-id="Completed work"]') &&
+        !chat.shadowRoot!.querySelector('[data-component-id="terminal"]'), 'result stays visible and terminal metadata does not render');
+    } finally {
+      chat.remove();
+    }
+  }
+}
+
 class Socket extends EventTarget {
   readyState = WebSocket.OPEN;
   send(_data: string) {}
@@ -140,6 +168,53 @@ async function testWebSocket() {
   await rejects(waiting, /connection error/);
 }
 
+async function testComponentLifecycle() {
+  const output = document.createElement('div');
+  document.body.append(output);
+  const manager = new ComponentManager(output);
+  const timestamp = new Date().toISOString();
+  const create = (id: string, type: string, data: Record<string, any>) => manager.processUpdate({
+    operation: 'create', target_id: id, timestamp,
+    component: { id, type, data, timestamp, lifecycle: 'create', visible: true, interactive: false, children: [] },
+  });
+  const update = (id: string, updates: Record<string, any>) => manager.processUpdate({ operation: 'update', target_id: id, timestamp, updates });
+  const remove = (id: string) => manager.processUpdate({ operation: 'remove', target_id: id, timestamp });
+  try {
+    create('steps', 'card', { title: 'Steps', content: '**First**', markdown: true, collapsible: true });
+    create('query', 'text', { content: 'SELECT 1' });
+    const card = output.querySelector('rich-card') as HTMLElement & { updateComplete: Promise<unknown> };
+    await card.updateComplete;
+    card.shadowRoot!.querySelector<HTMLButtonElement>('.card-toggle')!.click();
+    for (const content of ['Second', 'Third']) {
+      update('steps', { content: `**${content}**` });
+      await card.updateComplete;
+      check(card.shadowRoot?.querySelector('.card-content.collapsed strong')?.textContent === content &&
+        card.nextElementSibling?.getAttribute('data-component-id') === 'query', 'update keeps the rich card, Markdown, collapse and execution order');
+    }
+    remove('steps');
+    check(!output.querySelector('rich-card') && !manager.getComponent('steps'), 'remove targets the current card');
+    update('query', { content: 'SELECT 2' });
+    update('query', { content: 'SELECT 3' });
+    check(output.querySelector('[data-component-id="query"]')?.textContent?.trim() === 'SELECT 3', 're-rendered text receives subsequent updates');
+    remove('query');
+    check(!output.querySelector('[data-component-id="query"]'), 'remove targets the replacement node');
+
+    create('result', 'dataframe', { columns: ['item', 'count'], data: [{ item: 'A', count: 1 }, { item: 'AA', count: 3 }, { item: 'B', count: 2 }] });
+    const original = output.querySelector<HTMLElement>('[data-component-id="result"]')!;
+    const count = original.querySelector<HTMLElement>('[data-column="count"]')!;
+    count.click(); count.click();
+    const filter = original.querySelector<HTMLInputElement>('input')!;
+    filter.value = 'a'; filter.dispatchEvent(new Event('input'));
+    update('result', { data: [{ item: 'AB', count: 5 }, { item: 'AC', count: 6 }, { item: 'B', count: 8 }] });
+    const next = output.querySelector<HTMLElement>('[data-component-id="result"]')!;
+    check(next !== original && next.querySelector<HTMLInputElement>('input')?.value === 'a' &&
+      next.querySelector<HTMLElement>('[data-column="count"]')?.dataset.sortDirection === 'desc' &&
+      Array.from(next.querySelectorAll('tbody td:first-child'), cell => cell.textContent).join(',') === 'AC,AB', 'table replacement restores filter and sort');
+  } finally {
+    output.remove();
+  }
+}
+
 function testToolErrorNotification() {
   const message = 'Tool error: invalid column <sample>';
   const rendered = new NotificationComponentRenderer().render({
@@ -206,6 +281,7 @@ async function testAssistantReplies() {
   };
 
   const chat = new DoollaChat();
+  chat.locale = 'zh-CN';
   document.body.append(chat);
   try {
     await chat.updateComplete;
@@ -274,10 +350,54 @@ async function testAssistantReplies() {
   }
 }
 
+async function testLocaleSwitchPreservesConversation() {
+  const requested: { locale: string; message: string }[] = [];
+  window.fetch = async (_url, init) => {
+    const request = JSON.parse(String(init?.body));
+    requested.push(request);
+    const rich = request.message === 'show rows'
+      ? { type: 'dataframe', id: 'rows', data: { chat_section: 'activity', title: '查询结果', row_count: 2, column_count: 1, columns: ['label'], data: [{ label: 'apple' }, { label: 'pear' }] } }
+      : { type: 'text', id: request.message || 'welcome', data: { content: request.locale === 'en' ? 'Hello' : '你好' } };
+    return new Response('data: ' + JSON.stringify({ rich: { ...rich, lifecycle: 'create' } }) + '\n\ndata: [DONE]\n\n');
+  };
+  const chat = new DoollaChat();
+  chat.locale = 'zh-CN';
+  document.body.append(chat);
+  try {
+    await chat.updateComplete;
+    check(await chat.sendMessage('show rows'), 'query in Chinese locale');
+    const root = chat.shadowRoot!;
+    const result = root.querySelector('[data-component-id="rows"]')!;
+    const search = result.querySelector('input')!;
+    check(search.placeholder === '搜索…', 'initial table language');
+    search.value = 'apple';
+    search.dispatchEvent(new Event('input'));
+    const tracker = chat.getProgressTracker()!;
+    await tracker.updateComplete;
+    const panel = tracker.shadowRoot!.querySelector('details')!;
+    panel.open = true;
+    const draft = root.querySelector('textarea')!;
+    draft.value = 'draft';
+    draft.dispatchEvent(new Event('input'));
+    const select = root.querySelector('select')!;
+    select.value = 'en';
+    select.dispatchEvent(new Event('change'));
+    await chat.updateComplete;
+    check(chat.lang === 'en' && search.getAttribute('placeholder') === 'Search...', 'existing table labels switch to English');
+    check(panel.open && draft.value === 'draft' && search.value === 'apple' &&
+      result.querySelectorAll('tbody tr').length === 1 && result.querySelector('h3')?.textContent === '查询结果',
+      'switch preserves draft, expanded state, filtered rows and previous result text');
+    check(requested.length === 2 && requested.every(r => r.locale === 'zh-CN'), 'switch did not issue a chat request');
+    check(await chat.sendMessage('/help') && requested[requested.length - 1]?.locale === 'en', 'next turn uses selected locale');
+  } finally {
+    chat.remove();
+  }
+}
+
 (async () => {
   try {
-    await testSse(); await testWebSocket(); testDataframe(); testToolErrorNotification(); await testTaskTracker();
-    await testFinalAnswerMarkdown(); await testAssistantReplies();
+    await testSse(); await testTurnOutcome(); await testWebSocket(); testDataframe(); testToolErrorNotification(); await testTaskTracker();
+    await testFinalAnswerMarkdown(); await testComponentLifecycle(); await testAssistantReplies(); await testLocaleSwitchPreservesConversation();
     document.body.dataset.testResult = 'passed';
   } catch (error) {
     document.body.textContent = String(error);

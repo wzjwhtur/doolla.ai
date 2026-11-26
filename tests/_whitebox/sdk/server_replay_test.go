@@ -151,6 +151,67 @@ func TestReplayCachesCompletedFailureAndInterrupt(t *testing.T) {
 	verifyCounter(t, db, 2)
 }
 
+func TestTurnOutcomeAcrossTransports(t *testing.T) {
+	for _, tc := range []struct {
+		name, status, code string
+		reply              Message
+		err                error
+	}{
+		{name: "success", status: "succeeded", reply: Message{Content: "Done"}},
+		{name: "provider error", status: "failed", code: "processing_error", err: errors.New("upstream offline")},
+		{name: "truncated answer", status: "partial", code: "model_response_incomplete", reply: Message{Content: "Started", FinishReason: "length"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, db := replayCounterServer(t, func(context.Context) (Message, error) { return tc.reply, tc.err })
+			const payload = `{"message":"increment","conversation_id":"conv","request_id":"test"}`
+			var pollResult struct{ Chunks []Chunk }
+			poll := replayPoll(h, payload)
+			if err := json.Unmarshal(poll.Body.Bytes(), &pollResult); err != nil || len(pollResult.Chunks) == 0 {
+				t.Fatalf("poll response: %v %s", err, poll.Body)
+			}
+			last := pollResult.Chunks[len(pollResult.Chunks)-1]
+			data, _ := last.Rich["data"].(map[string]any)
+			code, _ := data["code"].(string)
+			if last.Rich["type"] != "turn_outcome" || data["status"] != tc.status || code != tc.code || last.RequestID != "test" || last.ConversationID != "conv" {
+				t.Fatalf("unexpected terminal frame: %+v", last)
+			}
+			sse := httptest.NewRecorder()
+			h.ServeHTTP(sse, replayRequest("sse", payload))
+			frames := strings.Split(strings.TrimSpace(sse.Body.String()), "\n\n")
+			var streamed Chunk
+			if len(frames) < 2 || frames[len(frames)-1] != "data: [DONE]" {
+				t.Fatalf("SSE completion: %s", sse.Body)
+			}
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(frames[len(frames)-2], "data: ")), &streamed); err != nil || streamed.Rich["id"] != last.Rich["id"] {
+				t.Fatalf("SSE should replay the same outcome: %+v, %v", streamed, err)
+			}
+			server := httptest.NewServer(h)
+			defer server.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/api/doolla/v2/chat_websocket", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.CloseNow()
+			if err := conn.Write(ctx, websocket.MessageText, []byte(payload)); err != nil {
+				t.Fatal(err)
+			}
+			for i := range pollResult.Chunks {
+				var chunk Chunk
+				if err := wsjson.Read(ctx, conn, &chunk); err != nil || chunk.Rich["id"] != pollResult.Chunks[i].Rich["id"] {
+					t.Fatalf("WebSocket replay chunk %d: %+v, %v", i, chunk, err)
+				}
+			}
+			var completion map[string]any
+			if err := wsjson.Read(ctx, conn, &completion); err != nil || completion["type"] != "completion" {
+				t.Fatalf("WebSocket completion: %v, %v", completion, err)
+			}
+			verifyCounter(t, db, 1)
+		})
+	}
+}
+
 func TestReplayLimitsAndExpiry(t *testing.T) {
 	c := newRequestReplay(ReplayOptions{Retention: time.Minute, MaxEntries: 2, MaxBytes: 10, MaxResponseBytes: 8})
 	now := time.Unix(0, 0)
@@ -227,8 +288,34 @@ func TestReplayScopesAuthorizationAndData(t *testing.T) {
 	}
 	wait, cancel := context.WithCancel(ctx)
 	cancel()
-	if err := (&Server{replay: c}).deliver(wait, u, req, e, false, func(json.RawMessage) error { return nil }); !errors.Is(err, context.Canceled) {
+	if err := (&Server{replay: c, agent: &Agent{}}).deliver(wait, u, req, e, false, "poll", func(json.RawMessage) error { return nil }); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
+	}
+}
+
+func TestReplayInFlightLimitLeavesRetriesAndCompletedIDsIntact(t *testing.T) {
+	c := newRequestReplay(ReplayOptions{MaxEntries: 2, MaxInFlight: 1})
+	user := User{ID: "viewer"}
+	message := "lookup"
+	first := ChatRequest{RequestID: "first", Message: &message}
+	entry, owner, err := c.reserve(user, &first)
+	if err != nil || !owner {
+		t.Fatalf("first admission: %t %v", owner, err)
+	}
+	second := ChatRequest{RequestID: "second", Message: &message}
+	if _, _, err := c.reserve(user, &second); !errors.Is(err, errReplayBusy) {
+		t.Fatalf("new request should wait: %v", err)
+	}
+	if existing, owner, err := c.reserve(user, &first); err != nil || owner || existing != entry {
+		t.Fatalf("an existing request can still replay: %t %v", owner, err)
+	}
+	c.finish(entry, true)
+	if _, owner, err := c.reserve(user, &second); err != nil || !owner {
+		t.Fatalf("another request can run after completion: %t %v", owner, err)
+	}
+	third := ChatRequest{RequestID: "third", Message: &message}
+	if _, _, err := c.reserve(user, &third); !errors.Is(err, errReplayFull) {
+		t.Fatalf("completed requests still count toward deduplication capacity: %v", err)
 	}
 }
 

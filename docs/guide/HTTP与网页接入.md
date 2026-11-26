@@ -67,7 +67,7 @@ socket.onmessage = ({ data }) => {
 }
 ```
 
-普通响应帧和 SSE 使用同一组件结构。结束帧的 `type` 和 `rich.type` 都是 `completion`，`data.status` 为 `done`，并带回 `request_id` 和 `conversation_id`。业务执行失败可能通过 `rich.type` 为 `status_card`、`rich.data.status` 为 `error` 的组件报告，也要检查返回内容。
+普通响应帧和 SSE 使用同一组件结构。WebSocket 以 `type: "completion"`、`data.status: "done"` 结束传输，SSE 以 `[DONE]` 结束。两种传输在结束前都会发送 `rich.type: "turn_outcome"`，轮询响应将该组件放在 `chunks` 末尾。用 `rich.data.status` 判断业务结果，取值为 `succeeded`、`partial` 或 `failed`。`rich.data.code` 提供机器可读的原因，例如 `query_partial` 或 `processing_error`。同一请求的重放保留原始结果及标识。连接中断时可能收不到结束组件，按下方的重试说明处理。
 
 ## 将组件放进现有页面
 
@@ -86,6 +86,16 @@ socket.onmessage = ({ data }) => {
 ```
 
 组件会先用 SSE 接收问答，首次收到组件前若连接失败，会携带同一请求 ID 回退到轮询。网关自定义路由时可配置 `sse-endpoint`、`poll-endpoint` 和 `ws-endpoint`。跨域页面与 API 均使用 HTTPS 时，签名 Cookie 支持可信跨源请求。宿主浏览器的第三方 Cookie 策略仍可能阻止跨站身份延续。通过同源网关也可保留会话。
+
+宿主页面可以监听组件的 `turn-completed` 事件，从 `event.detail` 读取 `status`、`code`、`request_id` 和 `conversation_id`。`sendMessage()` 在服务明确返回部分完成或失败时返回 `false`，页面仍会保留已收到的结果和错误提示。旧服务仅发送传输结束标记时，组件沿用原有返回值。
+
+## 选择界面和回复语言
+
+独立网页右上角可以切换「简体中文 / English」，刷新后保留选择。嵌入网页可以设置 `<doolla-chat locale="zh-CN">`，并通过 `locale-changed` 事件读取用户选择。服务支持 `en` 和 `zh-CN`，以及与它们匹配的语言标签。
+
+SSE、轮询和 WebSocket 的请求正文均接受可选的 `locale`。例如 `{"message":"/help","locale":"zh-CN"}`。服务依次读取正文语言、`Accept-Language` 和服务默认值。重试时保留同一语言和请求 ID。更换语言发起新请求时使用新的请求 ID。
+
+`/docs?locale=zh-CN` 和 `/docs?locale=en` 提供对应语言的交互文档。更多示例见[英文接入指南](en/getting-started.md)。
 
 ## 管理身份和重试
 

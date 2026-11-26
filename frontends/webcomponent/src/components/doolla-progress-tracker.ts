@@ -1,6 +1,8 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
+import { t } from '../i18n/index.js';
+import type { Locale } from '../i18n/index.js';
 import { doollaDesignTokens } from '../styles/doolla-design-tokens.js';
 
 interface ProgressItem {
@@ -275,6 +277,7 @@ export class DoollaProgressTracker extends LitElement {
 
   @property() title = 'Progress';
   @property() theme = 'light';
+  @property() locale: Locale = 'en';
   @property({ type: Boolean, reflect: true }) collapsible = false;
   @property({ type: Boolean }) running = false;
   @state() private entries: ActivityEntry[] = [];
@@ -373,7 +376,7 @@ export class DoollaProgressTracker extends LitElement {
 
   interrupt() {
     this.entries = this.entries.map(entry => entry.kind === 'task' && entry.status === 'in_progress'
-      ? { ...entry, status: 'error', detail: '连接中断' }
+      ? { ...entry, status: 'error', detail: t(this.locale, 'web.status.interrupted') }
       : entry);
   }
 
@@ -390,7 +393,7 @@ export class DoollaProgressTracker extends LitElement {
   private renderItem(item: ProgressItem) {
     return html`
       <div class="progress-item ${item.status}" role="listitem">
-        <div class="progress-icon ${item.status}" aria-label=${item.status.replace('_', ' ')} role="img">
+        <div class="progress-icon ${item.status}" aria-label=${t(this.locale, `web.progress.${item.status}`)} role="img">
           ${this.getStatusIcon(item.status)}
         </div>
         <div class="progress-content">
@@ -417,8 +420,9 @@ export class DoollaProgressTracker extends LitElement {
     if (this.collapsible) {
       const failures = items.filter(item => item.status === 'error').length;
       const state = failures ? 'error' : this.running ? 'running' : '';
-      const summary = failures ? `${failures} 个步骤失败`
-        : this.running ? '进行中' : items.length ? `${items.length} 个步骤` : '';
+      const summary = failures ? t(this.locale, 'web.progress.failures', failures)
+        : this.running ? t(this.locale, 'web.progress.in_progress')
+          : items.length ? t(this.locale, 'web.progress.steps', items.length) : '';
       return html`
         <details>
           <summary class="thought-summary">
@@ -426,7 +430,7 @@ export class DoollaProgressTracker extends LitElement {
               stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
               <path d="m6 4 4 4-4 4"/>
             </svg>
-            <span class="thought-label">思考过程</span>
+            <span class="thought-label">${t(this.locale, 'web.progress.title')}</span>
             <span class="thought-meta ${state}">${summary}</span>
           </summary>
           <div class="thought-content" role="list">
@@ -445,14 +449,14 @@ export class DoollaProgressTracker extends LitElement {
     return html`
       ${items.length > 0 ? html`
         <div class="progress-label">
-          <span class="progress-label-text">Tasks</span>
-          <span class="progress-summary">${completed}/${items.length} completed</span>
+          <span class="progress-label-text">${t(this.locale, 'web.progress.tasks')}</span>
+          <span class="progress-summary">${t(this.locale, 'web.progress.completed_count', completed, items.length)}</span>
         </div>
       ` : ''}
 
       <div class="progress-list" role="list">
         ${items.length === 0
-          ? html`<div class="empty-state">No tasks yet</div>`
+          ? html`<div class="empty-state">${t(this.locale, 'web.progress.empty')}</div>`
           : items.map(item => this.renderItem(item))}
       </div>
     `;

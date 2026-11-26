@@ -1,6 +1,38 @@
 package doolla
 
-import "strings"
+import (
+	"regexp"
+	"slices"
+	"strings"
+)
+
+var explicitSQLRequests = []*regexp.Regexp{
+	regexp.MustCompile(`(?is)^(?:请)?(?:只调用一次\s*run_sql\s*)?执行\s*(?:这条|以下|下面的?)?\s*(?:只读)?\s*SQL\s*[:：]\s*(.+?)(?:[;；]\s*(?:请)?(?:直接)?按实际结果回答[。.!！]?)?$`),
+	regexp.MustCompile(`(?is)^(?:please\s+)?(?:only\s+)?(?:run|execute)\s+(?:(?:this|the following)\s+)?(?:read-only\s+)?SQL\s*:\s*(.+?)(?:;\s*(?:please\s+)?(?:return|show)\s+(?:only\s+)?(?:the\s+)?(?:actual\s+|query\s+)?results?[.!]?)?$`),
+}
+
+func explicitSQLStatement(question string) string {
+	for _, pattern := range explicitSQLRequests {
+		match := pattern.FindStringSubmatch(strings.TrimSpace(question))
+		if match == nil {
+			continue
+		}
+		statement := trimSQLTerminator(match[1])
+		words := topLevelWords(statement)
+		if len(words) == 0 || words[0] != "SELECT" || strings.Contains(statement, ";") ||
+			slices.ContainsFunc(words, func(word string) bool {
+				return strings.Contains(" INTO INSERT UPDATE DELETE MERGE REPLACE ALTER CREATE DROP EXEC EXECUTE TRUNCATE ", " "+word+" ")
+			}) {
+			return ""
+		}
+		return statement
+	}
+	return ""
+}
+
+func trimSQLTerminator(statement string) string {
+	return strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(statement), ";"))
+}
 
 // commandWithoutRows distinguishes DML without RETURNING/OUTPUT from queries.
 // Ignore quoted strings, identifiers, comments and CTE bodies when reading

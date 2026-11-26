@@ -30,10 +30,22 @@ mkdir -p "$tmp/source" "$out/proxy"
 ./scripts/package-go.sh
 tar -xzf dist/doolla-source.tar.gz -C "$tmp/source"
 
+sdk_source="$tmp/source/src/doolla"
+payload="$tmp/payload"
+mkdir -p "$payload/bin"
+platform=$(uname -s)
+# Build from the extracted distribution so the checkout cannot supply missing assets.
+if [[ $platform == Darwin ]]; then
+  arch=$(go env GOHOSTARCH)
+  GOWORK=off GOOS=darwin GOARCH="$arch" CGO_ENABLED=1 go -C "$sdk_source" build -mod=readonly -trimpath -o "$payload/bin/doolla" ./cmd/doolla
+else
+  GOWORK=off go -C "$sdk_source" build -mod=readonly -trimpath -o "$payload/bin/doolla" ./cmd/doolla
+fi
+
 sdk=doolla.ai/sdk
 # Separate nested modules before zipping the parent. Only staged copies are edited.
-mv "$tmp/source/src/doolla/integrations/chromalocal" "$tmp/chromalocal"
-mv "$tmp/source/src/doolla/integrations/database/drivers" "$tmp/drivers"
+mv "$sdk_source/integrations/chromalocal" "$tmp/chromalocal"
+mv "$sdk_source/integrations/database/drivers" "$tmp/drivers"
 built=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 publish_module() {
   local dir=$1 mod=$2 target="$out/proxy/$2/@v"
@@ -48,16 +60,12 @@ publish_module() {
   mv "$dir" "$tmp/zip/$prefix"
   (cd "$tmp/zip" && zip -q -X -r -D "$target/$tag.zip" "$prefix")
 }
-publish_module "$tmp/source/src/doolla" "$sdk"
+publish_module "$sdk_source" "$sdk"
 publish_module "$tmp/drivers" "$sdk/integrations/database/drivers"
 publish_module "$tmp/chromalocal" "$sdk/integrations/chromalocal"
 COPYFILE_DISABLE=1 tar -czf "$out/doolla-module-proxy-$tag.tar.gz" -C "$out" proxy
 
-if [[ $(uname -s) == Darwin ]]; then
-  arch=$(go env GOHOSTARCH)
-  payload="$tmp/payload"
-  mkdir -p "$payload/bin"
-  GOOS=darwin GOARCH="$arch" CGO_ENABLED=1 go -C src/doolla build -mod=readonly -trimpath -o "$payload/bin/doolla" ./cmd/doolla
+if [[ $platform == Darwin ]]; then
   sign_args=()
   if [[ -n ${MAC_APP_IDENTITY:-} || -n ${MAC_INSTALLER_IDENTITY:-} ]]; then
     : "${MAC_APP_IDENTITY:?set both Developer ID identities}" "${MAC_INSTALLER_IDENTITY:?set both Developer ID identities}"

@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"slices"
 	"time"
+
+	"doolla.ai/sdk/internal/i18n"
 )
 
 type Turn struct {
@@ -83,10 +85,12 @@ type WorkflowDecision struct {
 type ConversationWorkflow func(context.Context, Turn, []Message, string, func(Component) error) (WorkflowDecision, error)
 
 type AgentConfig struct {
-	Audit        *AuditConfig
-	Registry     *ToolRegistry
-	HideProgress bool
-	UIFeatures   map[string][]string
+	// DefaultLocale applies when the caller does not select a supported locale.
+	DefaultLocale string
+	Audit         *AuditConfig
+	Registry      *ToolRegistry
+	HideProgress  bool
+	UIFeatures    map[string][]string
 	// ReplaceDefaultUIFeatures interprets UIFeatures as the entire policy,
 	// matching an explicit Python feature_group_access mapping.
 	ReplaceDefaultUIFeatures bool
@@ -100,6 +104,10 @@ type AgentConfig struct {
 	// DirectTextRecall opts a service with a custom system prompt or model middleware
 	// into returning an authorized, explicitly requested text memory verbatim.
 	DirectTextRecall bool
+	// DirectSQLResult skips a model summary for an explicitly requested single
+	// SELECT once the requested statement has returned a verified scalar result.
+	// It requires VerifyToolAnswers and preserves normal tool execution and hooks.
+	DirectSQLResult  bool
 	Memory           MemoryStore
 	TextMemoryRecall MemoryRecall // The zero value uses DefaultTextRecall.
 	Conversations    ConversationStore
@@ -162,6 +170,7 @@ func (a *Agent) systemPrompt(ctx context.Context, t Turn, q string, tools []Tool
 				prompt += "\nSave reusable schema or business knowledge as text memory. Exclude temporary query results."
 			}
 		}
+		prompt += "\n" + i18n.T(i18n.WithLocale(ctx, requestedAnswerLocale(q)), "server.model.response_language")
 	}
 	if a.config.EnhancePrompt != nil {
 		child, trace := a.startSpan(ctx, "agent.llm_context.enhance_system_prompt", "agent.llm_context.enhance_system_prompt.duration", nil, nil)

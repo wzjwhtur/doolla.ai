@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"doolla.ai/sdk/internal/i18n"
 )
 
 // WorkspaceProcess is implemented by the host application's workspace runner.
@@ -102,21 +104,21 @@ func pythonTools(run WorkspaceCommand, combined bool) []Registration {
 				parts = append(parts, "STDERR:\n"+stderr)
 			}
 			if len(parts) == 1 {
-				parts = append(parts, "(no output)")
+				parts = append(parts, i18n.T(ctx, "server.process.empty"))
 			}
 			body := strings.Join(parts, "\n\n")
-			summary := fmt.Sprintf("Executed python %s (exit code %d).", a.Filename, output.ExitCode)
+			summary := i18n.T(ctx, "server.process.python", a.Filename, output.ExitCode)
 			if spec.Name == "pip_install" {
-				summary = "pip install completed successfully."
+				summary = i18n.T(ctx, "server.process.pip_ok")
 				if output.ExitCode != 0 {
-					summary = fmt.Sprintf("pip install failed (exit code %d).", output.ExitCode)
+					summary = i18n.T(ctx, "server.process.pip_error", output.ExitCode)
 				}
 			}
 			status := "success"
 			if output.ExitCode != 0 {
 				status = "error"
 			}
-			result := ToolResult{Content: summary + "\n\n" + body, Component: &Component{Type: "card", Data: map[string]any{"title": "Command Result", "content": body, "status": status}, Simple: plainToolText(summary)}}
+			result := ToolResult{Content: summary + "\n\n" + body, Component: &Component{Type: "card", Data: map[string]any{"title": i18n.T(ctx, "server.process.result"), "content": body, "status": status}, Simple: plainToolText(summary)}}
 			if output.ExitCode != 0 {
 				return result, errors.New(result.Content)
 			}

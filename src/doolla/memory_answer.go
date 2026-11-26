@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"doolla.ai/sdk/internal/i18n"
 )
 
 // Distinguish requests to recall a fact from commands that store it. In particular,
@@ -108,14 +110,15 @@ func (a *Agent) answerFromMemory(ctx context.Context, t Turn, c Conversation, me
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	content := "未找到达到相似度要求的匹配记忆。"
-	progress := status("warning", "未找到匹配记忆")
+	content := i18n.T(ctx, "server.memory.none")
+	progress := status("warning", i18n.T(ctx, "server.memory.none_short"))
 	if err != nil {
-		content = "记忆检索失败，请稍后重试。"
-		progress = status("error", "记忆检索失败")
+		recordTurnOutcome(ctx, failedOutcome("memory_search_failed"))
+		content = i18n.T(ctx, "server.memory.failed")
+		progress = status("error", i18n.T(ctx, "server.memory.failed_short"))
 	} else if len(found) > 0 && found[0].Score >= a.config.TextMemoryRecall.Threshold && found[0].Memory.Kind == "text" && strings.TrimSpace(found[0].Memory.Content) != "" {
 		content = found[0].Memory.Content
-		progress = status("success", "已读取匹配记忆")
+		progress = status("success", i18n.T(ctx, "server.memory.matched"))
 	}
 	return a.finishVerifiedText(ctx, t, c, messages, emit, content, progress, false)
 }

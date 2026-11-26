@@ -2,6 +2,7 @@ import { LitElement, html, css, render } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { doollaDesignTokens } from '../styles/doolla-design-tokens.js';
 import { DoollaApiClient, ChatRequest, ChatStreamChunk } from '../services/api-client.js';
+import type { TurnOutcome } from '../services/api-client.js';
 import { ComponentManager, ComponentUpdate, RichComponent } from './rich-component-system.js';
 import './doolla-status-bar.js';
 import './doolla-progress-tracker.js';
@@ -10,6 +11,8 @@ import './rich-card.js';
 import './rich-task-list.js';
 import './rich-progress-bar.js';
 import './plotly-chart.js';
+import { browserLocale, normalizeLocale, t } from '../i18n/index.js';
+import type { Locale } from '../i18n/index.js';
 
 interface AssistantReply {
   content: HTMLElement;
@@ -200,6 +203,23 @@ export class DoollaChat extends LitElement {
       .window-controls {
         display: flex;
         gap: var(--doolla-space-1);
+      }
+
+      .language-select {
+        align-self: center;
+        max-width: 92px;
+        min-height: 32px;
+        padding-inline: 4px;
+        border: 1px solid var(--chat-outline);
+        border-radius: 6px;
+        background: var(--chat-surface);
+        color: var(--chat-text);
+        font: inherit;
+      }
+
+      .language-select:focus-visible {
+        outline: 2px solid var(--chat-primary);
+        outline-offset: 2px;
       }
 
       .window-control-btn, .send-button {
@@ -509,8 +529,30 @@ export class DoollaChat extends LitElement {
     `
   ];
 
-  @property() title = 'Doolla AI Chat';
-  @property() placeholder = 'Ask me anything...';
+  @property() title = '';
+  @property() placeholder = '';
+  @property({ reflect: true }) locale = '';
+  @property({ attribute: 'default-locale' }) defaultLocale = 'en';
+  @property({ type: Boolean }) standalone = false;
+
+  private get activeLocale(): Locale {
+    return normalizeLocale(this.locale) ?? browserLocale() ?? normalizeLocale(this.defaultLocale) ?? 'en';
+  }
+
+  private get displayTitle(): string {
+    return this.title || t(this.activeLocale, 'web.chat.title');
+  }
+
+  private changeLocale(event: Event) {
+    const select = event.currentTarget as HTMLSelectElement;
+    const locale = normalizeLocale(select.value);
+    if (!locale) return;
+    this.locale = locale;
+    if (this.standalone) {
+      try { localStorage.setItem('doolla.locale', locale); } catch { /* Browser storage can be disabled. */ }
+    }
+    this.dispatchEvent(new CustomEvent('locale-changed', { detail: { locale }, bubbles: true, composed: true }));
+  }
   @property({ type: Boolean }) disabled = false;
   @property({ type: Boolean, reflect: true, attribute: 'show-progress' }) showProgress = true;
   @property({ type: Boolean }) allowMinimize = true;
@@ -573,6 +615,14 @@ export class DoollaChat extends LitElement {
     });
   }
 
+  connectedCallback() {
+    super.connectedCallback();
+    if (this.standalone && !normalizeLocale(this.locale)) {
+      try { this.locale = normalizeLocale(localStorage.getItem('doolla.locale') ?? '') ?? ''; }
+      catch { /* The browser language still applies when storage is unavailable. */ }
+    }
+  }
+
   firstUpdated() {
     // Create API client now that attributes have been set
     this.ensureApiClient();
@@ -580,7 +630,7 @@ export class DoollaChat extends LitElement {
     // Initialize component manager with rich components container (fallback)
     const richContainer = this.shadowRoot?.querySelector('.rich-components-container') as HTMLElement;
     if (richContainer) {
-      this.componentManager = new ComponentManager(richContainer);
+      this.componentManager = new ComponentManager(richContainer, this.activeLocale);
       
       // Watch for changes in the rich components container to manage empty state
       this.componentObserver = new MutationObserver(() => {
@@ -617,6 +667,7 @@ export class DoollaChat extends LitElement {
         message: "",
         conversation_id: this.conversationId,
         request_id: this.generateId(),
+        locale: this.activeLocale,
         metadata: {
           starter_ui_request: true
         }
@@ -642,6 +693,11 @@ export class DoollaChat extends LitElement {
 
   updated(changedProperties: Map<string, any>) {
     super.updated(changedProperties);
+    if (changedProperties.has('locale') || changedProperties.has('defaultLocale') || changedProperties.has('standalone')) {
+      this.lang = this.activeLocale;
+      if (this.standalone) this.ownerDocument.documentElement.lang = this.activeLocale;
+      this.componentManager?.setLocale(this.activeLocale);
+    }
 
     // Update host classes based on window state
     if (changedProperties.has('windowState')) {
@@ -694,12 +750,13 @@ export class DoollaChat extends LitElement {
     }
 
     this.addMessage(messageText, 'user');
+    const locale = this.activeLocale;
     const reply = this.createAssistantReply();
     if (reply) {
       reply.tracker.running = true;
-      reply.tracker.activity = '正在发送…';
+      reply.tracker.activity = t(locale, 'web.status.sending');
     }
-    this.setStatus(this.showProgress ? 'idle' : 'working', this.showProgress ? '' : 'Sending message...');
+    this.setStatus(this.showProgress ? 'idle' : 'working', this.showProgress ? '' : t(locale, 'web.status.sending'));
 
     // Clear input only if we're sending from the input field
     if (messageText === this.currentMessage) {
@@ -723,21 +780,22 @@ export class DoollaChat extends LitElement {
         message: messageText,
         conversation_id: this.conversationId,
         request_id: this.generateId(),
+        locale,
         metadata: {}
       };
 
       // Stream the response
-      await this.handleStreamingResponse(request, reply);
-      return true; // Success
+      const outcome = await this.handleStreamingResponse(request, reply);
+      return !outcome || outcome.status === 'succeeded';
 
     } catch (error) {
       console.error('Error sending message:', error);
-      this.setStatus('error', 'Failed to send message', error instanceof Error ? error.message : 'Unknown error');
+      this.setStatus('error', t(locale, 'web.status.send_failed'));
 
       // Add error message
       reply?.tracker.interrupt();
       this.appendMessage(
-        `Sorry, I encountered an error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        t(locale, 'web.status.send_retry'),
         'assistant',
         reply?.content
       );
@@ -751,9 +809,9 @@ export class DoollaChat extends LitElement {
   }
 
   private getTitleInitials(): string {
-    const title = (this.title || '').trim();
+    const title = this.title.trim();
     if (!title) {
-      return 'VA';
+      return 'DA';
     }
 
     const parts = title.split(/\s+/).filter(Boolean);
@@ -764,7 +822,7 @@ export class DoollaChat extends LitElement {
     const first = parts[0].charAt(0);
     const last = parts[parts.length - 1].charAt(0);
     const initials = `${first}${last}`.toUpperCase();
-    return initials || 'VA';
+    return initials || 'DA';
   }
 
   private minimizeWindow(e?: Event) {
@@ -820,7 +878,7 @@ export class DoollaChat extends LitElement {
       <div class="assistant-avatar" aria-hidden="true">DA</div>
       <div>
         <span class="assistant-name">Doolla AI</span>
-        <doolla-progress-tracker collapsible></doolla-progress-tracker>
+        <doolla-progress-tracker collapsible .locale=${this.activeLocale}></doolla-progress-tracker>
         <div class="assistant-content"></div>
       </div>
     `, row);
@@ -874,18 +932,27 @@ export class DoollaChat extends LitElement {
     return trackers?.[trackers.length - 1] ?? this.createAssistantReply()?.tracker ?? null;
   }
 
-  private async handleStreamingResponse(request: ChatRequest, initialReply?: AssistantReply) {
+  private async handleStreamingResponse(request: ChatRequest, initialReply?: AssistantReply): Promise<TurnOutcome | undefined> {
     if (!this.apiClient || this.apiClient.baseUrl !== this.apiBaseUrl) {
       this.ensureApiClient();
     }
 
+    const locale = normalizeLocale(request.locale) ?? this.activeLocale;
     let reply = initialReply;
+    let outcome: TurnOutcome | undefined;
     const process = (chunk: ChatStreamChunk) => {
       const update = this.getChunkUpdate(chunk);
       if (!update) return;
 
       const component = update.component;
       const type = component?.type;
+      if (component?.type === 'turn_outcome') {
+        const { status, code } = component.data ?? {};
+        if (status === 'succeeded' || status === 'partial' || status === 'failed') {
+          outcome = { status, code, request_id: chunk.request_id, conversation_id: chunk.conversation_id };
+        }
+        return;
+      }
       if (component?.type === 'status_bar_update' && component.data?.status === 'working' && this.showProgress) {
         reply ??= this.createAssistantReply();
         if (reply) {
@@ -919,14 +986,14 @@ export class DoollaChat extends LitElement {
 
       try {
         if (this.showProgress && reply) {
-          reply.tracker.activity = '连接中断，正在重试…';
+          reply.tracker.activity = t(locale, 'web.status.retry_connection');
         } else {
-          this.setStatus('working', 'Connection issue, retrying...', 'Using fallback method');
+          this.setStatus('working', t(locale, 'web.status.retry_connection'));
         }
         const response = await this.apiClient.sendPollMessage(request);
         for (const chunk of response.chunks) process(chunk);
       } catch (pollError) {
-        this.setStatus('error', 'Connection failed', 'Unable to reach server');
+        this.setStatus('error', t(locale, 'web.status.connection_failed'));
         throw pollError;
       }
     } finally {
@@ -936,6 +1003,10 @@ export class DoollaChat extends LitElement {
         reply.tracker.activity = '';
       }
     }
+    if (outcome && !request.metadata?.starter_ui_request) {
+      this.dispatchEvent(new CustomEvent<TurnOutcome>('turn-completed', { detail: outcome, bubbles: true, composed: true }));
+    }
+    return outcome;
   }
 
   private getChunkUpdate(chunk: ChatStreamChunk): ComponentUpdate | undefined {
@@ -1049,7 +1120,7 @@ export class DoollaChat extends LitElement {
     return html`
       <!-- Minimized icon - shown only when minimized via CSS and allowMinimize is true -->
       ${this.allowMinimize ? html`
-        <button class="minimized-icon" type="button" aria-label="Open chat" @click=${this.restoreWindow}>
+        <button class="minimized-icon" type="button" aria-label=${t(this.activeLocale, 'web.chat.open')} @click=${this.restoreWindow}>
           <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor" width="24" height="24">
             <path d="M20 2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14l4 4V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z"/>
           </svg>
@@ -1061,12 +1132,17 @@ export class DoollaChat extends LitElement {
         <header class="chat-header">
           <div class="chat-avatar" aria-hidden="true">${this.getTitleInitials()}</div>
           <div class="header-text">
-            <h2 class="chat-title">${this.title}</h2>
+            <h2 class="chat-title">${this.displayTitle}</h2>
             ${this.subtitle ? html`<p class="chat-subtitle">${this.subtitle}</p>` : ''}
           </div>
           <div class="window-controls">
+            <select class="language-select" aria-label=${t(this.activeLocale, 'web.chat.language')}
+              .value=${this.activeLocale} @change=${this.changeLocale}>
+              <option value="zh-CN" ?selected=${this.activeLocale === 'zh-CN'}>简体中文</option>
+              <option value="en" ?selected=${this.activeLocale === 'en'}>English</option>
+            </select>
             ${this.allowMinimize ? html`
-              <button class="window-control-btn minimize" type="button" aria-label="Minimize" title="Minimize"
+              <button class="window-control-btn minimize" type="button" aria-label=${t(this.activeLocale, 'web.chat.minimize')} title=${t(this.activeLocale, 'web.chat.minimize')}
                 @click=${this.minimizeWindow}>
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                   <path d="M5 12h14"/>
@@ -1074,14 +1150,14 @@ export class DoollaChat extends LitElement {
               </button>
             ` : ''}
             ${this.windowState === 'maximized' ? html`
-              <button class="window-control-btn restore" type="button" aria-label="Restore" title="Restore"
+              <button class="window-control-btn restore" type="button" aria-label=${t(this.activeLocale, 'web.chat.restore')} title=${t(this.activeLocale, 'web.chat.restore')}
                 @click=${this.restoreWindow}>
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                   <path d="M9 5h10v10M5 9h10v10H5z"/>
                 </svg>
               </button>
             ` : html`
-              <button class="window-control-btn maximize" type="button" aria-label="Maximize" title="Maximize"
+              <button class="window-control-btn maximize" type="button" aria-label=${t(this.activeLocale, 'web.chat.maximize')} title=${t(this.activeLocale, 'web.chat.maximize')}
                 @click=${this.maximizeWindow}>
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                   <path d="M5 5h14v14H5z"/>
@@ -1099,12 +1175,12 @@ export class DoollaChat extends LitElement {
                   <path d="M4 5h16v12H9l-5 3zM8 9h8m-8 4h6" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
               </div>
-              <h3 class="empty-state-text">Start a conversation</h3>
-              <p class="empty-state-subtitle">Ask a question about your data.</p>
+              <h3 class="empty-state-text">${t(this.activeLocale, 'web.chat.empty_title')}</h3>
+              <p class="empty-state-subtitle">${t(this.activeLocale, 'web.chat.empty_body')}</p>
             </div>
 
             <!-- Rich Components Container - all content renders here via ComponentManager -->
-            <div class="rich-components-container" role="log" aria-label="Conversation"></div>
+            <div class="rich-components-container" role="log" aria-label=${t(this.activeLocale, 'web.chat.history')}></div>
           </div>
 
           <div class="chat-input-area">
@@ -1119,8 +1195,8 @@ export class DoollaChat extends LitElement {
               <div class="chat-input-container">
                 <textarea
                   class="message-input"
-                  aria-label="Message"
-                  .placeholder=${this.placeholder}
+                  aria-label=${t(this.activeLocale, 'web.chat.message')}
+                  .placeholder=${this.placeholder || t(this.activeLocale, 'web.chat.placeholder')}
                   .disabled=${this.disabled}
                   @input=${this.handleInput}
                   @keydown=${this.handleKeyPress}
@@ -1129,7 +1205,7 @@ export class DoollaChat extends LitElement {
                 <button
                   class="send-button"
                   type="button"
-                  aria-label="Send message"
+                  aria-label=${t(this.activeLocale, 'web.chat.send')}
                   .disabled=${this.disabled || !this.currentMessage.trim()}
                   @click=${this.sendMessage}
                 >
@@ -1139,7 +1215,7 @@ export class DoollaChat extends LitElement {
                   </svg>
                 </button>
               </div>
-              <p class="composer-hint">Enter to send · Shift + Enter for a new line</p>
+              <p class="composer-hint">${t(this.activeLocale, 'web.chat.keyboard')}</p>
             </div>
           </div>
         </div>

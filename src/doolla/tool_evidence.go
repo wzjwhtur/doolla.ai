@@ -3,28 +3,112 @@ package doolla
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
+
+	"doolla.ai/sdk/internal/i18n"
 )
 
 // Only track receipts from this Chat invocation. History, catalog inspection and
 // the assistant's description of a tool call cannot establish a new result.
 type turnEvidence struct {
-	scalar                           scalarEvidence
-	watchSQL, needRows, attemptedSQL bool
-	metricContext                    bool
-	save                             string
-	hasRows, inspected, retried      bool
-	receipt                          string
-	verbatim                         string
-	fileSaved                        bool
+	scalar             scalarEvidence
+	watchSQL, needRows bool
+	metricContext      bool
+	save               string
+	inspected, retried bool
+	receipt            string
+	verbatim           string
+	fileSaved          bool
+	queries            []sqlReceipt
 }
 
-const noQueryResult = "本轮未取得查询结果，无法确认数据。"
-const noMemoryWrite = "本轮未确认记忆写入成功。"
-const noMemoryAccess = "当前身份没有保存记忆的权限，本次未写入。"
+type sqlReceipt struct {
+	callID, statement string
+	failed, hasResult bool
+	artifact          queryResultArtifact
+}
+
+type queryResultArtifact struct {
+	id       string
+	filename string
+}
+
+type queryResultsKey struct{}
+
+func (e *turnEvidence) queryResults() []queryResultArtifact {
+	var artifacts []queryResultArtifact
+	for _, receipt := range e.queries {
+		if receipt.artifact.id != "" {
+			artifacts = append(artifacts, receipt.artifact)
+		}
+	}
+	return artifacts
+}
+
+// Record what actually ran and only use result data a completion hook has
+// allowed through. A hook cannot turn a failed SQL execution into evidence.
+func (e *turnEvidence) recordSQL(call ToolCall, statement string, ran bool, rowCount int, returnedRows bool, file string, result *ToolResult) {
+	r := sqlReceipt{callID: call.ID, statement: statement, failed: !ran || result.Error != ""}
+	count, hasCount := result.Metadata["row_count"].(int)
+	cols, _ := result.Metadata["columns"].([]string)
+	rows, hasRows := result.Metadata["results"].([]map[string]any)
+	r.hasResult = !r.failed && returnedRows && hasCount && rowCount == count && len(cols) != 0 && hasRows && len(rows) == count
+	r.failed = r.failed || (returnedRows && !r.hasResult)
+	if e.watchSQL {
+		e.needRows = e.needRows || !commandWithoutRows(statement)
+		if r.hasResult {
+			e.scalar.record(*result)
+		}
+	}
+	if output, _ := result.Metadata["output_file"].(string); r.hasResult && count > 0 && file != "" && output == file {
+		id := fmt.Sprintf("result_%d", len(e.queryResults())+1)
+		r.artifact = queryResultArtifact{id: id, filename: file}
+		result.Content += "\nQuery result ID: " + id
+	}
+	if component := result.Component; r.hasResult && component != nil && component.Type == "dataframe" && component.Data != nil {
+		published := *component
+		published.Data = maps.Clone(component.Data)
+		published.Data["tool_call_id"] = r.callID
+		if r.artifact.id != "" {
+			published.Data["result_id"] = r.artifact.id
+		}
+		result.Component = &published
+	}
+	e.queries = append(e.queries, r)
+}
+
+func (e turnEvidence) hasQueryResult() bool {
+	return slices.ContainsFunc(e.queries, func(r sqlReceipt) bool { return r.hasResult })
+}
+
+func (e turnEvidence) queryAnswer(ctx context.Context) (string, bool) {
+	answer := e.scalar.answer(ctx)
+	pending, failures := make(map[string]int), 0
+	for _, r := range e.queries {
+		if r.failed {
+			failures++
+			if r.statement != "" {
+				pending[r.statement]++
+			}
+		} else if r.hasResult {
+			// A successful retry can close earlier failures for the same SQL.
+			failures -= pending[r.statement]
+			delete(pending, r.statement)
+		}
+	}
+	if failures == 0 {
+		return answer, false
+	}
+	if answer == "" {
+		answer = i18n.T(ctx, "server.query.full_table")
+	}
+	return i18n.T(ctx, "server.query.partial", failures) + "\n\n" + answer, true
+}
 
 var dataRequest = regexp.MustCompile(`(?i)run_sql|\bselect\b.+\bfrom\b|查询|查一下|查出|统计|多少|总数|总量|总行数|有几|前[十百\d]+|排名|同比|环比|销量|产量|\b(?:how many|how much|count|sales|revenue|top [0-9]+|sum of|total orders|show (?:the )?(?:rows|data))\b`)
 var catalogQuestion = regexp.MustCompile(`(?i)表结构|有哪些表|哪些字段|哪些列|外键|主键|表关系|\b(?:schema|foreign keys?|primary keys?|table structure)\b`)
@@ -63,25 +147,9 @@ func (a *Agent) requiredEvidence(q string, history []Message) turnEvidence {
 }
 
 func (e *turnEvidence) record(call ToolCall, result ToolResult, err error) {
-	if e.watchSQL {
-		switch call.Function.Name {
-		case "inspect_mssql_schema":
-			e.inspected = err == nil && result.Error == ""
-			e.needRows = true
-		case "run_sql":
-			// Observe the actual executor result before a completion hook can
-			// replace its error text or presentation component.
-			e.attemptedSQL = true
-			var args struct{ SQL string }
-			if json.Unmarshal([]byte(call.Function.Arguments), &args) == nil && !commandWithoutRows(args.SQL) {
-				e.needRows = true
-			}
-			_, rows := result.Metadata["row_count"]
-			e.hasRows = err == nil && result.Error == "" && rows
-			if e.hasRows {
-				e.scalar.record(result)
-			}
-		}
+	if e.watchSQL && call.Function.Name == "inspect_mssql_schema" {
+		e.inspected = err == nil && result.Error == ""
+		e.needRows = true
 	}
 	if err == nil && result.Error == "" {
 		if isMemoryWriteTool(call.Function.Name) {
@@ -95,9 +163,10 @@ func (e *turnEvidence) record(call ToolCall, result ToolResult, err error) {
 
 // Finish through the same persistence and lifecycle hooks as a model reply.
 // The text is also emitted when progress or tool details are hidden.
-func (a *Agent) finishVerified(ctx context.Context, t Turn, c Conversation, messages []Message, emit func(Component) error, content string, ok bool) error {
+func (a *Agent) finishVerified(ctx context.Context, t Turn, c Conversation, messages []Message, emit func(Component) error, content string, outcome turnOutcome) error {
+	recordTurnOutcome(ctx, outcome)
 	level := "warning"
-	if ok {
+	if outcome.status == "" {
 		level = "success"
 	}
 	return a.finishVerifiedText(ctx, t, c, messages, emit, content, status(level, content), true)
@@ -116,7 +185,7 @@ func (a *Agent) finishVerifiedText(ctx context.Context, t Turn, c Conversation, 
 	return emit(Component{Type: "text", Data: map[string]any{"content": content, "markdown": markdown}})
 }
 
-func (e turnEvidence) pending() bool { return e.save != "" || (e.needRows && !e.hasRows) }
+func (e turnEvidence) pending() bool { return e.save != "" || (e.needRows && !e.hasQueryResult()) }
 
 func (e turnEvidence) directSave() Message {
 	args, _ := json.Marshal(map[string]string{"content": e.verbatim})

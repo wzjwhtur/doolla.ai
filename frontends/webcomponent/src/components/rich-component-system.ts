@@ -9,6 +9,8 @@ import type { DoollaProgressTracker } from './doolla-progress-tracker';
 
 import { richComponentStyleText } from '../styles/rich-component-styles.js';
 import { renderMarkdown } from './markdown.js';
+import { localizeDOM, setWidgetLocales } from '../i18n/index.js';
+import type { Locale } from '../i18n/index.js';
 
 // Component interfaces matching the chat API
 export interface RichComponent {
@@ -84,18 +86,19 @@ export interface ComponentUpdate {
 // Component renderer interface
 export interface ComponentRenderer {
   render(component: RichComponent): HTMLElement;
-  update(element: HTMLElement, component: RichComponent, updates?: Record<string, any>): void;
+  update(element: HTMLElement, component: RichComponent, updates?: Record<string, any>): HTMLElement | void;
   remove(element: HTMLElement): void;
 }
 
 // Base component renderer with common functionality
 export abstract class BaseComponentRenderer implements ComponentRenderer {
+  locale: Locale = 'en';
   abstract render(component: RichComponent): HTMLElement;
 
-  update(element: HTMLElement, component: RichComponent, _updates?: Record<string, any>): void {
-    // Default implementation - re-render completely
+  update(element: HTMLElement, component: RichComponent, _updates?: Record<string, any>): HTMLElement | void {
     const newElement = this.render(component);
-    element.parentNode?.replaceChild(newElement, element);
+    element.replaceWith(newElement);
+    return newElement;
   }
 
   remove(element: HTMLElement): void {
@@ -220,7 +223,7 @@ export class CardComponentRenderer extends BaseComponentRenderer {
     return card;
   }
 
-  update(element: HTMLElement, component: RichComponent, updates?: Record<string, any>): void {
+  update(element: HTMLElement, component: RichComponent, updates?: Record<string, any>): HTMLElement | void {
     if (!updates) return super.update(element, component);
 
     // Optimized updates for common properties
@@ -244,7 +247,7 @@ export class CardComponentRenderer extends BaseComponentRenderer {
 
     // For complex updates, fall back to full re-render
     if (updates.actions || updates.collapsible) {
-      super.update(element, component);
+      return super.update(element, component);
     }
   }
 }
@@ -302,7 +305,7 @@ export class TaskListComponentRenderer extends BaseComponentRenderer {
           ${progressBar}
           ${showTimestamps && task.created_at ? `
             <div class="task-timestamp">
-              Created: ${new Date(task.created_at).toLocaleString()}
+              Created: ${new Date(task.created_at).toLocaleString(this.locale)}
             </div>
           ` : ''}
         </div>
@@ -345,7 +348,7 @@ export class ProgressBarComponentRenderer extends BaseComponentRenderer {
     return container;
   }
 
-  update(element: HTMLElement, component: RichComponent, updates?: Record<string, any>): void {
+  update(element: HTMLElement, component: RichComponent, updates?: Record<string, any>): HTMLElement | void {
     if (!updates) return super.update(element, component);
 
     if (updates.value !== undefined) {
@@ -470,7 +473,7 @@ export class StatusIndicatorComponentRenderer extends BaseComponentRenderer {
     }
   }
 
-  update(element: HTMLElement, component: RichComponent, updates?: Record<string, any>): void {
+  update(element: HTMLElement, component: RichComponent, updates?: Record<string, any>): HTMLElement | void {
     if (!updates) return super.update(element, component);
 
     const content = element.querySelector('.status-indicator-content');
@@ -500,7 +503,7 @@ export class StatusIndicatorComponentRenderer extends BaseComponentRenderer {
 
 // DataFrame component renderer
 export class DataFrameComponentRenderer extends BaseComponentRenderer {
-  render(component: RichComponent): HTMLElement {
+  render(component: RichComponent, previous?: HTMLElement): HTMLElement {
     const container = document.createElement('div');
     container.className = 'rich-component rich-dataframe';
     container.dataset.componentId = component.id;
@@ -534,8 +537,8 @@ export class DataFrameComponentRenderer extends BaseComponentRenderer {
           ${title ? `<h3 class="dataframe-title">${this.escapeHtml(title)}</h3>` : ''}
           ${description ? `<p class="dataframe-description">${this.escapeHtml(description)}</p>` : ''}
           <div class="dataframe-meta">
-            <span class="row-count">${this.escapeHtml(row_count)} rows</span>
-            <span class="column-count">${this.escapeHtml(column_count)} columns</span>
+            <span class="row-count" data-i18n="web.table.row-count" data-i18n-args='${JSON.stringify([Number(row_count)])}'>${this.escapeHtml(row_count)} rows</span>
+            <span class="column-count" data-i18n="web.table.column-count" data-i18n-args='${JSON.stringify([Number(column_count)])}'>${this.escapeHtml(column_count)} columns</span>
           </div>
         </div>
       `;
@@ -547,11 +550,11 @@ export class DataFrameComponentRenderer extends BaseComponentRenderer {
         <div class="dataframe-actions">
           ${searchable ? `
             <div class="dataframe-search">
-              <input type="text" placeholder="Search..." class="search-input">
+              <input type="text" placeholder="Search..." data-i18n-placeholder="web.table.search" class="search-input">
             </div>
           ` : ''}
           ${exportable ? `
-            <button class="export-btn" title="Export to CSV">📥 Export</button>
+            <button class="export-btn" title="Export to CSV" data-i18n-title="web.table.export_title">📥 <span data-i18n="web.table.export">Export</span></button>
           ` : ''}
         </div>
       `;
@@ -594,7 +597,7 @@ export class DataFrameComponentRenderer extends BaseComponentRenderer {
           </table>
           ${hasMoreRows ? `
             <div class="dataframe-truncated">
-              <em>Showing ${this.escapeHtml(max_rows_displayed)} of ${this.escapeHtml(row_count)} rows</em>
+              <em data-i18n="web.table.truncated" data-i18n-args='${JSON.stringify([Number(max_rows_displayed), Number(row_count)])}'>Showing ${this.escapeHtml(max_rows_displayed)} of ${this.escapeHtml(row_count)} rows</em>
             </div>
           ` : ''}
         </div>
@@ -602,7 +605,7 @@ export class DataFrameComponentRenderer extends BaseComponentRenderer {
     } else {
       tableHTML = `
         <div class="dataframe-empty">
-          <p>No data to display</p>
+          <p data-i18n="web.table.empty">No data to display</p>
         </div>
       `;
     }
@@ -615,9 +618,15 @@ export class DataFrameComponentRenderer extends BaseComponentRenderer {
 
 
     // Add event listeners
-    this.attachEventListeners(container, displayedData, columns);
+    this.attachEventListeners(container, displayedData, columns, column_types, previous);
 
     return container;
+  }
+
+  update(element: HTMLElement, component: RichComponent): HTMLElement {
+    const replacement = this.render(component, element);
+    element.replaceWith(replacement);
+    return replacement;
   }
 
   private formatCellValue(value: any, columnType: string): string {
@@ -627,10 +636,10 @@ export class DataFrameComponentRenderer extends BaseComponentRenderer {
 
     switch (columnType) {
       case 'number':
-        return this.escapeHtml(typeof value === 'number' ? value.toLocaleString() : value);
+        return this.escapeHtml(typeof value === 'number' ? value.toLocaleString(this.locale) : value);
       case 'date':
         try {
-          return new Date(value).toLocaleDateString();
+          return new Date(value).toLocaleDateString(this.locale);
         } catch {
           return this.escapeHtml(value);
         }
@@ -646,17 +655,8 @@ export class DataFrameComponentRenderer extends BaseComponentRenderer {
       .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
-  private attachEventListeners(container: HTMLElement, data: any[], columns: string[]): void {
-    // Search functionality
-    const searchInput = container.querySelector('.search-input') as HTMLInputElement;
-    if (searchInput) {
-      searchInput.addEventListener('input', (e) => {
-        const searchTerm = (e.target as HTMLInputElement).value.toLowerCase();
-        this.filterTable(container, data, columns, searchTerm);
-      });
-    }
-
-    // Export functionality
+  private attachEventListeners(container: HTMLElement, data: any[], columns: string[], columnTypes: Record<string, string>, previous?: HTMLElement): void {
+    const searchInput = container.querySelector<HTMLInputElement>('.search-input');
     const exportBtn = container.querySelector('.export-btn') as HTMLButtonElement;
     if (exportBtn) {
       exportBtn.addEventListener('click', () => {
@@ -664,86 +664,54 @@ export class DataFrameComponentRenderer extends BaseComponentRenderer {
       });
     }
 
-    // Sort functionality
-    const sortableHeaders = container.querySelectorAll('th.sortable');
-    sortableHeaders.forEach(header => {
+    const oldSort = previous?.querySelector<HTMLElement>('th[data-sort-direction]');
+    const headers = Array.from(container.querySelectorAll<HTMLElement>('th.sortable'));
+    let sort = oldSort ? headers.find(header => header.dataset.column === oldSort.dataset.column) : undefined;
+    if (sort && oldSort) this.setSort(sort, oldSort.dataset.sortDirection === 'desc' ? 'desc' : 'asc');
+    if (searchInput && previous) {
+      searchInput.value = previous.querySelector<HTMLInputElement>('.search-input')?.value ?? '';
+    }
+    const refresh = () => this.refreshRows(container, data, columns, columnTypes, searchInput?.value.toLowerCase() ?? '', sort);
+    searchInput?.addEventListener('input', refresh);
+    headers.forEach(header => {
       header.addEventListener('click', () => {
-        this.sortTable(container, data, columns, header as HTMLElement);
+        const direction = header.dataset.sortDirection === 'asc' ? 'desc' : 'asc';
+        if (sort) this.setSort(sort);
+        sort = header;
+        this.setSort(header, direction);
+        refresh();
       });
     });
+    if (sort || searchInput?.value) refresh();
   }
 
-  private filterTable(container: HTMLElement, data: any[], columns: string[], searchTerm: string): void {
+  private setSort(header: HTMLElement, direction?: 'asc' | 'desc'): void {
+    if (direction) header.dataset.sortDirection = direction;
+    else delete header.dataset.sortDirection;
+    const indicator = header.querySelector('.sort-indicator');
+    if (indicator) indicator.textContent = direction === 'asc' ? '↑' : direction === 'desc' ? '↓' : '';
+  }
+
+  private refreshRows(container: HTMLElement, data: any[], columns: string[], columnTypes: Record<string, string>, search: string, sort?: HTMLElement): void {
     const tbody = container.querySelector('tbody');
     if (!tbody) return;
-
-    const filteredData = data.filter(row => {
-      return columns.some(col => {
-        const value = String(row[col] || '').toLowerCase();
-        return value.includes(searchTerm);
+    const rows = search ? data.filter(row => columns.some(col => String(row[col] ?? '').toLowerCase().includes(search))) : [...data];
+    const column = sort?.dataset.column;
+    if (column !== undefined) {
+      const sign = sort?.dataset.sortDirection === 'desc' ? -1 : 1;
+      rows.sort((a, b) => {
+        const aVal = a[column];
+        const bVal = b[column];
+        if (aVal == null) return bVal == null ? 0 : 1;
+        if (bVal == null) return -1;
+        const order = typeof aVal === 'number' && typeof bVal === 'number'
+          ? aVal - bVal : String(aVal).toLowerCase().localeCompare(String(bVal).toLowerCase(), this.locale);
+        return sign * order;
       });
-    });
-
-    tbody.innerHTML = filteredData.map(row => `
-      <tr>
-        ${columns.map(col => {
-          const value = row[col];
-          const formattedValue = this.formatCellValue(value, 'string');
-          return `<td>${formattedValue}</td>`;
-        }).join('')}
-      </tr>
-    `).join('');
-  }
-
-  private sortTable(container: HTMLElement, data: any[], columns: string[], header: HTMLElement): void {
-    const tbody = container.querySelector('tbody');
-    const column = header.dataset.column;
-    if (!tbody || column === undefined) return;
-
-    // Determine sort direction
-    const currentSort = header.dataset.sortDirection || 'none';
-    const newSort = currentSort === 'asc' ? 'desc' : 'asc';
-
-    // Clear all sort indicators
-    container.querySelectorAll('th[data-sort-direction]').forEach(h => {
-      (h as HTMLElement).removeAttribute('data-sort-direction');
-      const indicator = h.querySelector('.sort-indicator');
-      if (indicator) indicator.textContent = '';
-    });
-
-    // Set new sort direction
-    header.dataset.sortDirection = newSort;
-    const indicator = header.querySelector('.sort-indicator');
-    if (indicator) {
-      indicator.textContent = newSort === 'asc' ? '↑' : '↓';
     }
-
-    // Sort data
-    const sortedData = [...data].sort((a, b) => {
-      const aVal = a[column];
-      const bVal = b[column];
-
-      if (aVal === null || aVal === undefined) return 1;
-      if (bVal === null || bVal === undefined) return -1;
-
-      if (typeof aVal === 'number' && typeof bVal === 'number') {
-        return newSort === 'asc' ? aVal - bVal : bVal - aVal;
-      }
-
-      const aStr = String(aVal).toLowerCase();
-      const bStr = String(bVal).toLowerCase();
-      const comparison = aStr.localeCompare(bStr);
-      return newSort === 'asc' ? comparison : -comparison;
-    });
-
-    // Update table
-    tbody.innerHTML = sortedData.map(row => `
+    tbody.innerHTML = rows.map(row => `
       <tr>
-        ${columns.map(col => {
-          const value = row[col];
-          const formattedValue = this.formatCellValue(value, 'string');
-          return `<td>${formattedValue}</td>`;
-        }).join('')}
+        ${columns.map(col => `<td>${this.formatCellValue(row[col], columnTypes[col] ?? 'string')}</td>`).join('')}
       </tr>
     `).join('');
   }
@@ -853,7 +821,7 @@ export class StatusCardComponentRenderer extends BaseComponentRenderer {
       ` : ''}
       ${hasMetadata ? `
         <details class="status-card-metadata">
-          <summary class="status-card-metadata-summary">Parameters</summary>
+          <summary class="status-card-metadata-summary" data-i18n="web.tool.parameters">Parameters</summary>
           <div class="status-card-metadata-content">
             ${this.renderMetadataTable(metadata)}
           </div>
@@ -901,8 +869,8 @@ export class StatusCardComponentRenderer extends BaseComponentRenderer {
       <table class="metadata-table">
         <thead>
           <tr>
-            <th>Parameter</th>
-            <th>Value</th>
+            <th data-i18n="web.tool.parameter">Parameter</th>
+            <th data-i18n="web.tool.value">Value</th>
           </tr>
         </thead>
         <tbody>
@@ -997,7 +965,7 @@ export class LogViewerComponentRenderer extends BaseComponentRenderer {
           <h3 class="log-viewer-title">${title}</h3>
           ${searchable ? `
             <div class="log-viewer-search">
-              <input type="text" placeholder="Search logs..." class="log-search-input">
+              <input type="text" placeholder="Search logs..." data-i18n-placeholder="web.logs.search" class="log-search-input">
             </div>
           ` : ''}
         </div>
@@ -1148,7 +1116,7 @@ export class ButtonComponentRenderer extends BaseComponentRenderer {
     return button;
   }
 
-  update(element: HTMLElement, component: RichComponent, updates?: Record<string, any>): void {
+  update(element: HTMLElement, component: RichComponent, updates?: Record<string, any>): HTMLElement | void {
     if (!updates) return super.update(element, component);
 
     const button = element as HTMLButtonElement;
@@ -1168,7 +1136,7 @@ export class ButtonComponentRenderer extends BaseComponentRenderer {
 
     if (updates.label || updates.icon || updates.icon_position) {
       // Re-render content
-      super.update(element, component);
+      return super.update(element, component);
     }
   }
 }
@@ -1350,7 +1318,7 @@ export class ChartComponentRenderer extends BaseComponentRenderer {
       // Fallback for invalid chart data
       container.innerHTML = `
         <div class="chart-error">
-          <p>Invalid chart data format</p>
+          <p data-i18n="web.chart.invalid">Invalid chart data format</p>
           <pre>${JSON.stringify(component.data, null, 2).substring(0, 200)}...</pre>
         </div>
       `;
@@ -1391,9 +1359,9 @@ export class ArtifactComponentRenderer extends BaseComponentRenderer {
           <span class="artifact-type-badge">${artifact_type}</span>
         </div>
         <div class="artifact-controls">
-          ${editable ? '<button class="artifact-btn edit-btn" title="Edit">✏️</button>' : ''}
-          ${fullscreen_capable ? '<button class="artifact-btn fullscreen-btn" title="Fullscreen">⛶</button>' : ''}
-          ${external_renderable ? '<button class="artifact-btn external-btn" title="Open External">🔗</button>' : ''}
+          ${editable ? '<button class="artifact-btn edit-btn" title="Edit" data-i18n-title="web.artifact.edit">✏️</button>' : ''}
+          ${fullscreen_capable ? '<button class="artifact-btn fullscreen-btn" title="Fullscreen" data-i18n-title="web.artifact.fullscreen">⛶</button>' : ''}
+          ${external_renderable ? '<button class="artifact-btn external-btn" title="Open External" data-i18n-title="web.artifact.external">🔗</button>' : ''}
         </div>
       </div>
       <div class="artifact-preview">
@@ -1417,7 +1385,7 @@ export class ArtifactComponentRenderer extends BaseComponentRenderer {
               <strong>${title || 'Artifact'}</strong> opened externally
               <div class="placeholder-type">${artifact_type}</div>
             </div>
-            <button class="placeholder-reopen" title="Reopen">↗</button>
+            <button class="placeholder-reopen" title="Reopen" data-i18n-title="web.artifact.reopen">↗</button>
           </div>
         </div>
       `;
@@ -1712,6 +1680,12 @@ export class ComponentRegistry {
     this.register('assistant-message', new AssistantMessageComponentRenderer());
   }
 
+  setLocale(locale: Locale): void {
+    for (const renderer of this.renderers.values()) {
+      if (renderer instanceof BaseComponentRenderer) renderer.locale = locale;
+    }
+  }
+
   register(type: string, renderer: ComponentRenderer): void {
     this.renderers.set(type, renderer);
   }
@@ -1742,22 +1716,17 @@ export class ComponentRegistry {
   }
 
   private renderWebComponent(tagName: string, component: RichComponent): HTMLElement {
-    const element = document.createElement(tagName) as any;
-
-    // Set properties based on component data
-    Object.keys(component.data).forEach(key => {
-      if (key === 'actions' && Array.isArray(component.data[key])) {
-        element.actions = component.data[key];
-      } else {
-        element[key] = component.data[key];
-      }
-    });
-
-    // Set theme to match the parent DoollaChat theme
+    const element = document.createElement(tagName);
+    this.applyWebComponentProperties(element, component.data);
     element.setAttribute('theme', this.getCurrentTheme());
-
-
     return element;
+  }
+
+  private applyWebComponentProperties(element: HTMLElement, data: Record<string, any>): void {
+    const declared = (element.constructor as typeof HTMLElement & { elementProperties?: Map<PropertyKey, unknown> }).elementProperties;
+    for (const [key, value] of Object.entries(data)) {
+      if (declared?.has(key)) Object.assign(element, { [key]: value });
+    }
   }
 
   private getCurrentTheme(): string {
@@ -1770,11 +1739,20 @@ export class ComponentRegistry {
   }
 
 
-  update(element: HTMLElement, component: RichComponent, updates?: Record<string, any>): void {
-    const renderer = this.renderers.get(component.type);
-    if (renderer) {
-      renderer.update(element, component, updates);
+  update(element: HTMLElement, component: RichComponent, updates?: Record<string, any>, changes = component.data): HTMLElement {
+    const tag = this.getWebComponentTag(component.type);
+    if (tag && element.localName === tag) {
+      this.applyWebComponentProperties(element, changes);
+      return element;
     }
+    const renderer = this.renderers.get(component.type);
+    return renderer ? renderer.update(element, component, updates) ?? element : this.replace(element, component);
+  }
+
+  replace(element: HTMLElement, component: RichComponent): HTMLElement {
+    const replacement = this.render(component);
+    element.replaceWith(replacement);
+    return replacement;
   }
 
   remove(element: HTMLElement): void {
@@ -1788,7 +1766,7 @@ export class ComponentRegistry {
 
     container.innerHTML = `
       <div class="fallback-header">
-        <strong>Unknown Component: ${component.type}</strong>
+        <strong><span data-i18n="web.component.unknown">Unknown component</span>: ${component.type}</strong>
       </div>
       <pre class="fallback-data">${JSON.stringify(component.data, null, 2)}</pre>
     `;
@@ -1815,9 +1793,21 @@ export class ComponentManager {
     'interactive',
   ]);
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, private locale: Locale = 'en') {
     this.container = container;
+    this.registry.setLocale(locale);
     ensureRichComponentStyles(this.container);
+  }
+
+  setLocale(locale: Locale): void {
+    this.locale = locale;
+    this.registry.setLocale(locale);
+    this.applyLocale(this.container);
+  }
+
+  private applyLocale(root: HTMLElement): void {
+    localizeDOM(root, this.locale);
+    setWidgetLocales(root, this.locale);
   }
 
   processUpdate(update: ComponentUpdate, target?: {
@@ -1851,22 +1841,24 @@ export class ComponentManager {
 
     const component = this.normalizeComponent(update.component);
     const element = this.registry.render(component);
-    this.components.set(component.id, component);
-    this.elements.set(component.id, element);
-
+    this.trackComponent(component, element);
     container.appendChild(element);
     this.triggerScroll();
   }
 
   private updateComponent(update: ComponentUpdate): void {
-    if (!update.component) return;
-
     const element = this.elements.get(update.target_id);
-    if (element) {
-      const component = this.normalizeComponent(update.component);
-      this.registry.update(element, component, update.updates);
-      this.components.set(update.target_id, component);
-    }
+    const previous = this.components.get(update.target_id);
+    if (!element || !previous || (!update.component && !update.updates)) return;
+    const payload = update.component && this.normalizeComponent(update.component);
+    const changes = { ...payload?.data, ...update.updates };
+    const typeChanged = payload !== undefined && payload.type !== previous.type;
+    const data = typeChanged ? changes : { ...previous.data, ...changes };
+    const component = { ...previous, ...payload, id: update.target_id, data };
+    const current = typeChanged
+      ? this.registry.replace(element, component)
+      : this.registry.update(element, component, update.updates && changes, changes);
+    this.trackComponent(component, current);
   }
 
   private replaceComponent(update: ComponentUpdate): void {
@@ -1875,11 +1867,7 @@ export class ComponentManager {
     const oldElement = this.elements.get(update.target_id);
     if (oldElement) {
       const component = this.normalizeComponent(update.component);
-      const newElement = this.registry.render(component);
-      oldElement.parentNode?.replaceChild(newElement, oldElement);
-
-      this.elements.set(component.id, newElement);
-      this.components.set(component.id, component);
+      this.trackComponent(component, this.registry.replace(oldElement, component));
 
       // Clean up old references if ID changed
       if (update.target_id !== component.id) {
@@ -1887,6 +1875,13 @@ export class ComponentManager {
         this.components.delete(update.target_id);
       }
     }
+  }
+
+  private trackComponent(component: RichComponent, element: HTMLElement): void {
+    element.dataset.componentId = component.id;
+    this.applyLocale(element);
+    this.components.set(component.id, component);
+    this.elements.set(component.id, element);
   }
 
   private removeComponent(update: ComponentUpdate): void {

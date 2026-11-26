@@ -14,6 +14,7 @@ export interface ChatRequest {
   conversation_id?: string;
   user_id?: string;
   request_id?: string;
+  locale?: string;
   metadata?: Record<string, any>;
 }
 
@@ -23,6 +24,13 @@ export interface ChatStreamChunk {
   conversation_id: string;
   request_id: string;
   timestamp: number;
+}
+
+export interface TurnOutcome {
+  status: 'succeeded' | 'partial' | 'failed';
+  code?: string;
+  conversation_id: string;
+  request_id: string;
 }
 
 export interface ChatResponse {

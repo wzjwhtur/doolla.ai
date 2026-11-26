@@ -1,5 +1,7 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
+import { t } from '../i18n/index.js';
+import type { Locale } from '../i18n/index.js';
 import { doollaDesignTokens } from '../styles/doolla-design-tokens.js';
 
 export interface TaskItem {
@@ -193,6 +195,7 @@ export class RichTaskList extends LitElement {
   ];
 
   @property() title = '';
+  @property() locale: Locale = 'en';
   @property({ type: Array }) tasks: TaskItem[] = [];
   @property({ type: Boolean }) showProgress = true;
   @property({ type: Boolean }) showTimestamps = false;
@@ -250,7 +253,7 @@ export class RichTaskList extends LitElement {
           <h3 class="task-list-title">${this.title}</h3>
           ${this.showProgress ? html`
             <div class="task-list-progress">
-              <span class="progress-text">${this.completedTasks}/${this.tasks.length} completed</span>
+              <span class="progress-text">${t(this.locale, 'web.progress.completed_count', this.completedTasks, this.tasks.length)}</span>
               <div class="progress-bar">
                 <div class="progress-fill" style="width: ${this.progressPercentage}%"></div>
               </div>

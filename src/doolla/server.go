@@ -18,6 +18,8 @@ import (
 	"doolla.ai/sdk/web_components"
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+
+	"doolla.ai/sdk/internal/i18n"
 )
 
 type UserResolver func(http.ResponseWriter, *http.Request) (User, error)
@@ -65,6 +67,7 @@ type ChatRequest struct {
 	ConversationID string         `json:"conversation_id"`
 	RequestID      string         `json:"request_id"`
 	Metadata       map[string]any `json:"metadata"`
+	Locale         string         `json:"locale,omitempty"`
 }
 type Chunk struct {
 	Rich           map[string]any `json:"rich"`
@@ -90,13 +93,23 @@ func NewServerWithOptions(agent *Agent, resolve UserResolver, options ServerOpti
 	}
 	s := Server{agent: agent, resolve: resolve, options: options, replay: newRequestReplay(options.Replay)}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /docs", webui.ServeDocs)
-	mux.HandleFunc("GET /openapi.json", webui.ServeSchema)
+	mux.HandleFunc("GET /docs", func(w http.ResponseWriter, r *http.Request) {
+		locale := s.locale(r, r.URL.Query().Get("locale"))
+		setContentLanguage(w, locale)
+		webui.ServeDocs(w, r.WithContext(i18n.WithLocale(r.Context(), locale)))
+	})
+	mux.HandleFunc("GET /openapi.json", func(w http.ResponseWriter, r *http.Request) {
+		locale := s.locale(r, r.URL.Query().Get("locale"))
+		setContentLanguage(w, locale)
+		webui.ServeSchema(w, r.WithContext(i18n.WithLocale(r.Context(), locale)))
+	})
 	mux.HandleFunc("GET /assets/doolla-components.js", webui.Serve)
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, `<!doctype html>
-<html lang="en">
+		locale := s.locale(r, "")
+		setContentLanguage(w, locale)
+		fmt.Fprintf(w, `<!doctype html>
+<html lang="%s">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>doolla.ai</title>
@@ -110,8 +123,8 @@ func NewServerWithOptions(agent *Agent, resolve UserResolver, options ServerOpti
     doolla-chat { --doolla-chat-height: calc(100dvh - 2px); }
   }
 </style>
-<doolla-chat></doolla-chat>
-</html>`)
+<doolla-chat standalone default-locale="%s"></doolla-chat>
+</html>`, locale, i18n.Resolve("", "", s.agent.config.DefaultLocale))
 	})
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"status": "healthy", "service": "doolla"})
@@ -121,6 +134,15 @@ func NewServerWithOptions(agent *Agent, resolve UserResolver, options ServerOpti
 	mux.HandleFunc("GET /api/doolla/v2/chat_websocket", s.socket)
 	return cors(mux, options.AllowedOrigins)
 }
+func (s *Server) locale(r *http.Request, explicit string) string {
+	return i18n.Resolve(explicit, r.Header.Get("Accept-Language"), s.agent.config.DefaultLocale)
+}
+
+func setContentLanguage(w http.ResponseWriter, locale string) {
+	w.Header().Set("Content-Language", locale)
+	w.Header().Add("Vary", "Accept-Language")
+}
+
 func writeJSON(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(data)
@@ -146,65 +168,78 @@ func (s *Server) stream(ctx context.Context, u User, req ChatRequest, send func(
 		}
 		return send(Chunk{rich, simple, req.ConversationID, req.RequestID, float64(now.UnixMicro()) / 1e6})
 	}
+	ctx = i18n.WithLocale(ctx, i18n.Resolve(req.Locale, "", s.agent.config.DefaultLocale))
 	ctx = context.WithValue(ctx, metadataKey{}, req.Metadata)
 	ctx = context.WithValue(ctx, requestIDKey{}, req.RequestID)
 	question := *req.Message
 	if req.Metadata["starter_ui_request"] == true {
 		question = ""
 	}
-	if err := s.agent.Chat(ctx, u, req.ConversationID, question, emit); err != nil {
+	var outcome turnOutcome
+	if err := s.agent.chat(ctx, u, req.ConversationID, question, emit, &outcome); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		var limit *ToolIterationLimitError
 		if errors.As(err, &limit) {
-			warning := fmt.Sprintf("Reached the configured limit (%d) for tool rounds. The task may be incomplete. Ask me to continue or break the task into smaller steps.", limit.Limit)
+			if outcome.status == "" {
+				outcome = failedOutcome("tool_iteration_limit")
+			}
+			warning := i18n.T(ctx, "server.error.tool_limit_body", limit.Limit)
 			for _, c := range []Component{
-				status("warning", "Tool limit reached"), textComponent(warning),
-				{Type: "chat_input_update", ID: "doolla-chat-input", Data: map[string]any{"disabled": false, "placeholder": "Continue the task…"}},
+				status("warning", i18n.T(ctx, "server.error.tool_limit")), textComponent(warning),
+				{Type: "chat_input_update", ID: "doolla-chat-input", Data: map[string]any{"disabled": false, "placeholder": i18n.T(ctx, "server.error.continue_task")}},
 			} {
 				if err := emit(c); err != nil {
 					return err
 				}
 			}
-			return nil
+			return emit(outcome.component())
 		}
 		slog.ErrorContext(ctx, "Doolla chat failed", "request_id", req.RequestID, "conversation_id", req.ConversationID, "error", err)
 		for _, component := range []Component{
-			{Type: "status_card", Data: map[string]any{"title": "Error processing message", "status": "error", "description": "The request could not be completed. Please try again."}, Simple: map[string]any{"type": "text", "text": "The request could not be completed."}},
-			status("error", "Unable to complete this request"),
-			{Type: "chat_input_update", ID: "doolla-chat-input", Data: map[string]any{"disabled": false, "placeholder": "Try again…"}},
+			{Type: "status_card", Data: map[string]any{"title": i18n.T(ctx, "server.error.processing_error"), "status": "error", "description": i18n.T(ctx, "server.error.try_again_body")}, Simple: map[string]any{"type": "text", "text": i18n.T(ctx, "server.error.request_incomplete")}},
+			status("error", i18n.T(ctx, "server.error.unable")),
+			{Type: "chat_input_update", ID: "doolla-chat-input", Data: map[string]any{"disabled": false, "placeholder": i18n.T(ctx, "server.error.retry")}},
 		} {
 			if err := emit(component); err != nil {
 				return err
 			}
 		}
-		return nil
+		return emit(failedOutcome("processing_error").component())
 	}
-	return nil
+	return emit(outcome.component())
 }
 
 func (s *Server) httpChat(w http.ResponseWriter, r *http.Request) {
 	var req ChatRequest
+	locale := s.locale(r, "")
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err := dec.Decode(&req); err != nil || req.prepare() != nil || dec.Decode(new(json.RawMessage)) != io.EOF {
 		w.Header().Set("Content-Type", "application/json")
+		setContentLanguage(w, locale)
 		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid chat request"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": i18n.Format(locale, "server.error.invalid_request"), "code": "invalid_chat_request"})
 		return
 	}
-	r = r.WithContext(context.WithValue(r.Context(), metadataKey{}, req.Metadata))
+	req.Locale = s.locale(r, req.Locale)
+	setContentLanguage(w, req.Locale)
+	r = r.WithContext(context.WithValue(i18n.WithLocale(r.Context(), req.Locale), metadataKey{}, req.Metadata))
 	user, err := s.resolveUser(w, r)
 	if err != nil || user.ID == "" {
-		http.Error(w, "Unauthorized", 401)
+		http.Error(w, i18n.T(r.Context(), "server.error.unauthorized"), 401)
 		return
 	}
-	entry, owner, err := s.replay.reserve(user, &req)
-	if err != nil {
-		http.Error(w, replayErrorText(err), replayStatus(err))
-		return
-	}
+	transport := "poll"
 	if strings.HasSuffix(r.URL.Path, "_sse") {
+		transport = "sse"
+	}
+	entry, owner, err := s.reserveReplay(r.Context(), user, &req, transport)
+	if err != nil {
+		http.Error(w, replayErrorText(r.Context(), err), replayStatus(err))
+		return
+	}
+	if transport == "sse" {
 		ctrl := http.NewResponseController(w)
 		started := false
 		start := func() {
@@ -216,7 +251,7 @@ func (s *Server) httpChat(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-Accel-Buffering", "no")
 			started = true
 		}
-		err := s.deliver(r.Context(), user, req, entry, owner, func(data json.RawMessage) error {
+		err := s.deliver(r.Context(), user, req, entry, owner, transport, func(data json.RawMessage) error {
 			start()
 			if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
 				return err
@@ -225,7 +260,7 @@ func (s *Server) httpChat(w http.ResponseWriter, r *http.Request) {
 		})
 		if err != nil {
 			if !started && r.Context().Err() == nil {
-				http.Error(w, replayErrorText(err), replayStatus(err))
+				http.Error(w, replayErrorText(r.Context(), err), replayStatus(err))
 			}
 			return
 		}
@@ -234,10 +269,10 @@ func (s *Server) httpChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	chunks := []json.RawMessage{}
-	err = s.deliver(r.Context(), user, req, entry, owner, func(raw json.RawMessage) error { chunks = append(chunks, raw); return nil })
+	err = s.deliver(r.Context(), user, req, entry, owner, transport, func(raw json.RawMessage) error { chunks = append(chunks, raw); return nil })
 	if err != nil {
 		if r.Context().Err() == nil {
-			http.Error(w, replayErrorText(err), replayStatus(err))
+			http.Error(w, replayErrorText(r.Context(), err), replayStatus(err))
 		}
 		return
 	}
@@ -274,23 +309,25 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 		// 后续帧仍需重新解析，并用该帧的元数据解析用户身份。
 		if kind != websocket.MessageText || json.Unmarshal(data, &req) != nil || req.prepare() != nil {
 			if err := wsjson.Write(r.Context(), conn, map[string]any{
-				"type": "error", "data": map[string]any{"status": 400, "message": "Invalid chat request"},
+				"type": "error", "data": map[string]any{"status": 400, "message": i18n.Format(s.locale(r, ""), "server.error.invalid_request"), "code": "invalid_chat_request"},
 			}); err != nil {
 				return
 			}
 			continue
 		}
-		frame := r.WithContext(context.WithValue(r.Context(), metadataKey{}, req.Metadata))
+		req.Locale = s.locale(r, req.Locale)
+		frame := r.WithContext(context.WithValue(i18n.WithLocale(r.Context(), req.Locale), metadataKey{}, req.Metadata))
 		authResponse := socketResolverResponse{http.Header{}}
 		user, authErr := s.resolveUser(authResponse, frame)
 		if authErr != nil || user.ID == "" {
-			conn.Close(websocket.StatusPolicyViolation, "Unauthorized")
+			conn.Close(websocket.StatusPolicyViolation, i18n.T(frame.Context(), "server.error.unauthorized"))
 			return
 		}
 		r = withResolverCookies(r, authResponse.header)
-		entry, owner, err := s.replay.reserve(user, &req)
+		const transport = "websocket"
+		entry, owner, err := s.reserveReplay(frame.Context(), user, &req, transport)
 		if err == nil {
-			err = s.deliver(frame.Context(), user, req, entry, owner, func(raw json.RawMessage) error {
+			err = s.deliver(frame.Context(), user, req, entry, owner, transport, func(raw json.RawMessage) error {
 				return conn.Write(frame.Context(), websocket.MessageText, raw)
 			})
 		}
@@ -299,7 +336,7 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 			if !errors.As(err, &p) {
 				return
 			}
-			body := map[string]any{"status": p.status, "message": p.reason}
+			body := map[string]any{"status": p.status, "message": replayErrorText(frame.Context(), err)}
 			if err := wsjson.Write(frame.Context(), conn, map[string]any{"type": "error", "rich": map[string]any{"type": "error", "data": body}, "data": body, "request_id": req.RequestID, "conversation_id": req.ConversationID}); err != nil {
 				return
 			}

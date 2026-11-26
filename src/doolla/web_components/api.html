@@ -1,7 +1,7 @@
 <!doctype html>
-<html lang="en"><head>
+<html lang="{{.}}"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Doolla Chat API</title>
+<title>{{t . "server.docs.title"}}</title>
 <style>
 body { margin: 2rem auto; padding: 0 1rem; max-width: 58rem; font: 1rem/1.5 system-ui, sans-serif }
 textarea, pre { box-sizing: border-box; padding: .75rem; width: 100%; font: .95rem/1.4 monospace }
@@ -10,18 +10,19 @@ summary { cursor: pointer; padding: .5rem 0; overflow-wrap: anywhere }
 button { padding: .45rem 1rem }
 </style></head><body>
 <main>
-<h1>Doolla Chat API</h1>
-<p><a href="/openapi.json">OpenAPI specification</a></p>
-<section id="operations" aria-label="Endpoints"></section>
-<h2>Try a polling request</h2>
-<form id="try"><label for="body">Request body</label>
+<nav aria-label="{{t . "server.docs.language"}}"><a href="/docs?locale=zh-CN" lang="zh-CN">简体中文</a> · <a href="/docs?locale=en" lang="en">English</a></nav>
+<h1>{{t . "server.docs.title"}}</h1>
+<p><a href="/openapi.json?locale={{.}}">{{t . "server.docs.spec"}}</a></p>
+<section id="operations" aria-label="{{t . "server.docs.endpoints"}}"></section>
+<h2>{{t . "server.docs.try"}}</h2>
+<form id="try"><label for="body">{{t . "server.docs.request"}}</label>
 <textarea id="body" rows="3">{"message": "/help"}</textarea>
-<button type="submit">Send request</button></form>
+<button type="submit">{{t . "server.docs.send"}}</button></form>
 <pre id="result" hidden aria-live="polite"></pre>
 </main><script type="module">
 const operations = document.querySelector('#operations');
 try {
-  const response = await fetch('/openapi.json');
+  const response = await fetch('/openapi.json?locale=' + document.documentElement.lang);
   const spec = await response.json();
   for (const [path, methods] of Object.entries(spec.paths)) {
     for (const [method, op] of Object.entries(methods)) {
@@ -41,9 +42,10 @@ document.querySelector('#try').addEventListener('submit', async event => {
   const button = event.target.querySelector('button');
   output.hidden = false;
   button.disabled = true;
-  output.textContent = 'Sending…';
+  output.textContent = {{t . "server.docs.sending"}};
   try {
-    const body = JSON.stringify(JSON.parse(document.querySelector('#body').value));
+    const request = JSON.parse(document.querySelector('#body').value);
+    const body = JSON.stringify({ locale: document.documentElement.lang, ...request });
     const response = await fetch('/api/doolla/v2/chat_poll', {method: 'POST', headers: {'Content-Type': 'application/json'}, body});
     const text = response.ok ? JSON.stringify(await response.json(), null, 2) : await response.text();
     output.textContent = response.status + ' ' + response.statusText + '\n' + text;

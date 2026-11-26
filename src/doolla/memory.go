@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math"
 	"slices"
 	"sort"
@@ -14,6 +13,8 @@ import (
 	"time"
 
 	"github.com/pmezard/go-difflib/difflib"
+
+	"doolla.ai/sdk/internal/i18n"
 )
 
 // MemoryEntry represents either a free-form text memory or a successful tool use.
@@ -308,11 +309,11 @@ func MemoryToolsWithRecall(store MemoryStore, recall MemoryRecall) []Registratio
 				if err != nil {
 					return ToolResult{}, err
 				}
-				brief := fmt.Sprintf("Found %d similar tool usage patterns.", len(matches))
+				brief := i18n.T(ctx, "server.memory.tool_matches", len(matches))
 				turn, _ := CurrentTurn(ctx)
 				card := status("success", brief)
 				if slices.Contains(turn.UIFeatures, "memory_detailed_results") {
-					card = Component{Type: "card", Data: map[string]any{"title": "Retrieved memories", "content": result.Content, "collapsible": true}}
+					card = Component{Type: "card", Data: map[string]any{"title": i18n.T(ctx, "server.memory.retrieved"), "content": result.Content, "collapsible": true}}
 				}
 				result.Component = &card
 				result.Metadata = map[string]any{"count": len(matches)}
@@ -334,7 +335,7 @@ func MemoryToolsWithRecall(store MemoryStore, recall MemoryRecall) []Registratio
 			if err != nil {
 				return ToolResult{}, err
 			}
-			msg := "Saved memory " + e.ID
+			msg := i18n.T(ctx, "server.memory.saved_id", e.ID)
 			return ToolResult{Content: msg, Component: &Component{Type: "notification", Data: map[string]any{"level": "success", "message": msg}}, Metadata: map[string]any{"memory_id": e.ID}}, nil
 		}}, groups})
 	}

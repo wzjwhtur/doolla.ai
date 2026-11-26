@@ -62,6 +62,43 @@ func (r *operationRecorder) assertEnded(t *testing.T, expected ...string) {
 	}
 }
 
+func TestServerTimingSeparatesWorkAndReplay(t *testing.T) {
+	var recorder operationRecorder
+	count := 0
+	model := testModel(func(context.Context, []doolla.Message, []doolla.ToolSpec) (doolla.Message, error) {
+		count++
+		return doolla.Message{Content: "Answer"}, nil
+	})
+	agent, err := doolla.NewConfiguredAgent(model, doolla.AgentConfig{Observability: &recorder})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := doolla.NewServer(agent, func(http.ResponseWriter, *http.Request) (doolla.User, error) {
+		return doolla.User{ID: "tester"}, nil
+	})
+	for _, mode := range []string{"sse", "poll"} {
+		body := strings.NewReader(`{"message":"hello","request_id":"timing","conversation_id":"thread"}`)
+		response := httptest.NewRecorder()
+		srv.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/doolla/v2/chat_"+mode, body))
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status %d", mode, response.Code)
+		}
+	}
+	if count != 1 || len(recorder.metrics["llm.request.duration"]) != 1 || len(recorder.metrics["agent.conversation.wait.duration"]) != 1 {
+		t.Fatalf("unexpected execution count %d and durations %v", count, recorder.metrics)
+	}
+	for _, metric := range []string{"server.chat.first_chunk.duration", "server.chat.first_answer.duration", "server.chat.outcome.count"} {
+		if tags := recorder.metrics[metric]; len(tags) != 1 || tags[0]["transport"] != "sse" {
+			t.Errorf("%s should measure the executing SSE request once, got %v", metric, tags)
+		}
+	}
+	tags := recorder.metrics["server.replay.reserve.count"]
+	if len(tags) != 2 || tags[0]["result"] != "new" || tags[1]["result"] != "replay" {
+		t.Errorf("admission metrics: %v", tags)
+	}
+	recorder.assertEnded(t, "server.chat.deliver", "agent.conversation.wait")
+}
+
 func TestAgentLifecycleFullConversationAndTelemetry(t *testing.T) {
 	user := doolla.User{ID: "operator"}
 	store := doolla.NewMemoryConversations()

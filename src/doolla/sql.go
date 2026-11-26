@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"doolla.ai/sdk/internal/i18n"
 )
 
 type SQLTool struct {
@@ -79,9 +81,9 @@ func (s SQLTool) Run(ctx context.Context, u User, raw json.RawMessage) (ToolResu
 		metadata["query_type"] = words[0]
 	}
 	if len(result.Columns) == 0 {
-		text := "Statement executed successfully."
+		text := i18n.T(ctx, "server.query.executed")
 		if result.Affected != nil {
-			text = fmt.Sprintf("Query executed successfully. %d row(s) affected.", *result.Affected)
+			text = i18n.T(ctx, "server.query.affected", *result.Affected)
 			metadata["rows_affected"] = *result.Affected
 		}
 		return ToolResult{Content: text, Metadata: metadata, Component: &Component{Type: "notification", Data: map[string]any{"level": "success", "message": text}, Simple: plainToolText(text)}}, nil
@@ -112,28 +114,34 @@ func (s SQLTool) Run(ctx context.Context, u User, raw json.RawMessage) (ToolResu
 	preview := []rune(text)
 	content := string(preview[:min(len(preview), 1000)])
 	if len(preview) > 1000 {
-		content += "\n(Results truncated to 1000 characters.)"
+		content += i18n.T(ctx, "server.query.truncated")
 	}
-	description := fmt.Sprintf("SQL query returned %d rows with %d columns", len(records), len(cols))
+	description := i18n.T(ctx, "server.query.description", len(records), len(cols))
+	var filename string
 	if len(records) == 0 {
-		description = "No rows returned"
-		content = "Query executed successfully. No rows returned."
+		description = i18n.T(ctx, "server.query.no_rows")
+		content = i18n.T(ctx, "server.query.empty")
 	} else if !s.DisableArtifacts {
 		files := s.Artifacts
 		if files == nil {
 			files = Artifacts{Directory: "."}
 		}
-		name := "query_results_" + newID() + ".csv"
-		if err := files.Write(u, name, []byte(text)); err != nil {
+		filename = "query_results_" + newID() + ".csv"
+		if err := files.Write(u, filename, []byte(text)); err != nil {
 			return ToolResult{}, err
 		}
-		content += "\nResults saved to file: " + name
-		metadata["output_file"] = name
+		metadata["output_file"] = filename
+	}
+	simpleContent := content
+	if filename != "" {
+		// The model receipt keeps its stable format across response languages.
+		content += "\nResults saved to file: " + filename
+		simpleContent += "\n" + i18n.T(ctx, "server.query.saved_file", filename)
 	}
 	component := Component{Type: "dataframe", Data: map[string]any{
-		"title": "Query Results", "description": description, "data": browserRows(records), "columns": cols,
+		"title": i18n.T(ctx, "server.query.results_title"), "description": description, "data": browserRows(records), "columns": cols,
 		"row_count": len(records), "column_count": len(cols), "column_types": map[string]string{}, "chat_section": "activity",
-	}, Simple: plainToolText(content)}
+	}, Simple: plainToolText(simpleContent)}
 	return ToolResult{Content: content, Component: &component, Metadata: metadata}, nil
 }
 

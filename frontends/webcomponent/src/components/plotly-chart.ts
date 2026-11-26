@@ -1,6 +1,8 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { doollaDesignTokens } from '../styles/doolla-design-tokens.js';
+import { t } from '../i18n/index.js';
+import type { Locale } from '../i18n/index.js';
 import Plotly from 'plotly.js-dist-min';
 
 export interface PlotlyData {
@@ -87,6 +89,7 @@ export class PlotlyChart extends LitElement {
   @property({ type: Object }) config = {};
   @property({ type: Boolean }) loading = false;
   @property() error = '';
+  @property() locale: Locale = 'en';
   @property() theme: 'light' | 'dark' = 'dark';
 
   private plotlyDiv?: HTMLElement;
@@ -184,9 +187,9 @@ export class PlotlyChart extends LitElement {
   render() {
     return html`
       ${this.loading ? html`
-        <div class="loading-message">Loading chart...</div>
+        <div class="loading-message">${t(this.locale, "web.chart.loading")}</div>
       ` : this.error ? html`
-        <div class="error-message">Error: ${this.error}</div>
+        <div class="error-message">${t(this.locale, "web.chart.render_failed")}</div>
       ` : html`
         <div class="plotly-div"></div>
       `}

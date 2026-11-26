@@ -42,7 +42,7 @@ func TestMetricAnswersNeedCurrentQuery(t *testing.T) {
 				t.Fatal(err)
 			}
 			var answer string
-			err = agent.Chat(t.Context(), doolla.User{ID: "test"}, "turn", tc.question, func(c doolla.Component) error {
+			err = agent.Chat(doolla.WithLocale(t.Context(), "zh-CN"), doolla.User{ID: "test"}, "turn", tc.question, func(c doolla.Component) error {
 				if c.Type == "text" {
 					answer = c.Data["content"].(string)
 				}

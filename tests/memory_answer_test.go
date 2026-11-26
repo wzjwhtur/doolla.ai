@@ -39,7 +39,7 @@ func TestMemoryAnswerRequiresReceipt(t *testing.T) {
 				user.Groups = []string{"admin"}
 			}
 			var answer string
-			if err := a.Chat(t.Context(), user, "review", tc.q, func(c sdk.Component) error {
+			if err := a.Chat(sdk.WithLocale(t.Context(), "zh-CN"), user, "review", tc.q, func(c sdk.Component) error {
 				if c.Type == "text" {
 					answer = fmt.Sprint(c.Data["content"])
 				}
@@ -74,7 +74,7 @@ func TestMemoryReadDoesNotWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	var text strings.Builder
-	err = a.Chat(t.Context(), sdk.User{ID: "admin", Groups: []string{"admin"}}, "lookup", "记住的质检代码是什么？", func(c sdk.Component) error { fmt.Fprint(&text, c.Data); return nil })
+	err = a.Chat(sdk.WithLocale(t.Context(), "zh-CN"), sdk.User{ID: "admin", Groups: []string{"admin"}}, "lookup", "记住的质检代码是什么？", func(c sdk.Component) error { fmt.Fprint(&text, c.Data); return nil })
 	rows, readErr := store.Recent(t.Context(), "text", 10)
 	if err != nil || readErr != nil || len(rows) != 0 || strings.Contains(text.String(), "已保存") {
 		t.Fatalf("answer=%q rows=%v err=%v/%v", text.String(), rows, err, readErr)
@@ -98,7 +98,7 @@ func TestMemoryConfirmationAfterIncidentalWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	var text strings.Builder
-	err = a.Chat(t.Context(), sdk.User{ID: "admin", Groups: []string{"admin"}}, "new", "处理这条可复用的术语", func(c sdk.Component) error { fmt.Fprint(&text, c.Data); return nil })
+	err = a.Chat(sdk.WithLocale(t.Context(), "zh-CN"), sdk.User{ID: "admin", Groups: []string{"admin"}}, "new", "处理这条可复用的术语", func(c sdk.Component) error { fmt.Fprint(&text, c.Data); return nil })
 	rows, readErr := store.Recent(t.Context(), "text", 10)
 	if err != nil || readErr != nil || len(rows) != 1 || !strings.Contains(text.String(), "已保存。") || strings.Contains(text.String(), "已经写入长期记忆。") {
 		t.Fatalf("answer=%q rows=%v err=%v/%v", text.String(), rows, err, readErr)
@@ -142,7 +142,7 @@ func TestReadRememberedFactUsesStore(t *testing.T) {
 				t.Fatal(err)
 			}
 			var data map[string]any
-			err = agent.Chat(t.Context(), sdk.User{ID: "reader", Groups: []string{"user"}}, "read", tc.q, func(c sdk.Component) error {
+			err = agent.Chat(sdk.WithLocale(t.Context(), "zh-CN"), sdk.User{ID: "reader", Groups: []string{"user"}}, "read", tc.q, func(c sdk.Component) error {
 				if c.Type == "text" {
 					data = c.Data
 				}
@@ -192,7 +192,7 @@ func TestDirectRecallPreservesHostPolicy(t *testing.T) {
 				t.Fatal(err)
 			}
 			var text string
-			err = a.Chat(t.Context(), sdk.User{ID: "reader", Groups: []string{"user"}}, "read", q, func(c sdk.Component) error {
+			err = a.Chat(sdk.WithLocale(t.Context(), "zh-CN"), sdk.User{ID: "reader", Groups: []string{"user"}}, "read", q, func(c sdk.Component) error {
 				if c.Type == "text" {
 					text = fmt.Sprint(c.Data["content"])
 				}

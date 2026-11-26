@@ -5,6 +5,9 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { generateBrowserCatalog } from '../scripts/generate-catalog.mjs';
+
+await generateBrowserCatalog(true);
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const frontend = path.dirname(here);

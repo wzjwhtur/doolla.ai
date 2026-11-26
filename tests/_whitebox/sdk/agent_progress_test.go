@@ -104,7 +104,7 @@ func TestToolFailureVisibleInChatByPermission(t *testing.T) {
 			}
 			var notices []string
 			var final string
-			err = a.Chat(t.Context(), User{ID: tc.group, Groups: []string{tc.group}}, "c", "run query", func(c Component) error {
+			err = a.Chat(WithLocale(t.Context(), "zh-CN"), User{ID: tc.group, Groups: []string{tc.group}}, "c", "run query", func(c Component) error {
 				if c.Type == "notification" && c.Data["level"] == "error" {
 					notices = append(notices, c.Data["message"].(string))
 				}

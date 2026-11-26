@@ -3,6 +3,9 @@ import { gzipSync } from 'node:zlib';
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { generateBrowserCatalog } from '../../../frontends/webcomponent/scripts/generate-catalog.mjs';
+
+await generateBrowserCatalog();
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const frontend = path.resolve(here, '../../../frontends/webcomponent');

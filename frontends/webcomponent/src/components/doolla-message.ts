@@ -1,5 +1,7 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
+import { t } from '../i18n/index.js';
+import type { Locale } from '../i18n/index.js';
 import { doollaDesignTokens } from '../styles/doolla-design-tokens.js';
 
 @customElement('doolla-message')
@@ -61,12 +63,13 @@ export class DoollaMessage extends LitElement {
   ];
 
   @property() content = '';
+  @property() locale: Locale = 'en';
   @property() type: 'user' | 'assistant' = 'user';
   @property({ type: Number }) timestamp = Date.now();
   @property({ reflect: true }) theme = 'light';
 
   private formatTimestamp(timestamp: number): string {
-    return new Date(timestamp).toLocaleTimeString([], {
+    return new Date(timestamp).toLocaleTimeString(this.locale, {
       hour: '2-digit',
       minute: '2-digit'
     });
@@ -74,7 +77,7 @@ export class DoollaMessage extends LitElement {
 
   render() {
     return html`
-      ${this.type === 'user' ? html`<div class="message-sender" lang="zh">我</div>` : ''}
+      ${this.type === 'user' ? html`<div class="message-sender">${t(this.locale, 'web.chat.self')}</div>` : ''}
       <div class="message ${this.type}">
         <div class="message-content">${this.content}</div>
         <div class="message-timestamp">

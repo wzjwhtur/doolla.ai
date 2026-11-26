@@ -1,18 +1,26 @@
 package doolla
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
+
+	"doolla.ai/sdk/internal/i18n"
 )
 
 // Keep exact driver values. SQL decimals commonly arrive as strings, and
 // converting them through float64 would lose scale or significant digits.
 var sqlNumber = regexp.MustCompile(`^[+-]?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$`)
 
+type scalarLine struct {
+	alias, value string
+	empty        bool
+}
+
 type scalarEvidence struct {
-	lines   []string
+	lines   []scalarLine
 	tabular bool
 }
 
@@ -29,7 +37,7 @@ func (e *scalarEvidence) record(result ToolResult) {
 	}
 	label := scalarColumn(cols[0])
 	if len(rows) == 0 {
-		e.lines = append(e.lines, "查询结果"+label+"未返回记录。")
+		e.lines = append(e.lines, scalarLine{alias: label, empty: true})
 		return
 	}
 	raw, present := rows[0][cols[0]]
@@ -47,13 +55,25 @@ func (e *scalarEvidence) record(result ToolResult) {
 		e.lines = nil
 		return
 	}
-	e.lines = append(e.lines, "查询结果"+label+"为 "+value+"。")
+	e.lines = append(e.lines, scalarLine{alias: label, value: value})
 }
 
-func (e scalarEvidence) answer() string {
-	summary := strings.Join(e.lines, "\n\n")
+func (e scalarEvidence) answer(ctx context.Context) string {
+	lines := make([]string, 0, len(e.lines))
+	for _, line := range e.lines {
+		alias := line.alias
+		if alias != "" {
+			alias = i18n.T(ctx, "server.query.scalar_alias", line.alias)
+		}
+		if line.empty {
+			lines = append(lines, i18n.T(ctx, "server.query.scalar_empty", alias))
+		} else {
+			lines = append(lines, i18n.T(ctx, "server.query.scalar_value", alias, line.value))
+		}
+	}
+	summary := strings.Join(lines, "\n\n")
 	if e.tabular && summary != "" {
-		return summary + "\n\n完整查询结果见表格。"
+		return summary + "\n\n" + i18n.T(ctx, "server.query.full_table")
 	}
 	return summary
 }
@@ -74,5 +94,5 @@ func scalarColumn(name string) string {
 		}
 	}
 	fence := strings.Repeat("`", longest+1)
-	return "（" + fence + " " + name + " " + fence + "）"
+	return fence + " " + name + " " + fence
 }
