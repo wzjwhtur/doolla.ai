@@ -226,6 +226,10 @@ async function testAssistantReplies() {
     const query = "SELECT '<span data-sql-html>' AS sample";
     send(0, 'sql_statement', 'sql-activity', { title: '生成的 SQL', content: query, code_language: 'sql', chat_section: 'activity' });
     send(0, 'dataframe', 'query-rows', { title: 'Query Results', columns: ['sample'], data: [{ sample: 'value' }], chat_section: 'activity' });
+    send(0, 'text', 'next-step', { content: 'check the next source', chat_section: 'activity' });
+    task(0, { operation: 'add_task', task: { id: 'follow-up', title: 'follow-up SQL', status: 'in_progress' } });
+    send(0, 'sql_statement', 'follow-up-sql', { content: 'SELECT 2', code_language: 'sql', chat_section: 'activity' });
+    task(0, { operation: 'update_task', task_id: 'follow-up', status: 'completed' });
     task(0, { operation: 'update_task', task_id: 'run', status: 'completed' });
     send(0, 'text', 'first-answer', { content: 'first answer' });
     for (const stream of openStreams) {
@@ -250,6 +254,14 @@ async function testAssistantReplies() {
       !replies[0].querySelector('.assistant-content .rich-dataframe'), 'query results render inside the thought panel');
     const details = trackers.map(tracker => tracker.shadowRoot!.querySelector('details')!);
     check(details.every(detail => !detail.open), 'thought panels are collapsed by default');
+    const timeline = Array.from(details[0].querySelector('.thought-content')!.children)
+      .flatMap(node => node instanceof HTMLSlotElement
+        ? node.assignedElements().flatMap(group => Array.from(group.children))
+        : [node])
+      .map(node => node.getAttribute('data-component-id') ?? node.querySelector('.progress-text')?.textContent);
+    check(timeline.join(',') === 'first SQL,sql-activity,query-rows,next-step,follow-up SQL,follow-up-sql',
+      'tool steps and rich output follow execution order even when earlier steps finish later');
+
     check(details[0].querySelector('.progress-item.completed')?.textContent?.includes('first SQL') &&
       details[1].querySelector('.progress-item.error')?.textContent?.includes('second SQL'),
       'each thought panel keeps its own tool state');

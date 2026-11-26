@@ -1,13 +1,19 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
+import { repeat } from 'lit/directives/repeat.js';
 import { doollaDesignTokens } from '../styles/doolla-design-tokens.js';
 
 interface ProgressItem {
+  kind: 'task';
   id: string;
   text: string;
   status: 'pending' | 'in_progress' | 'completed' | 'error';
   detail?: string;
 }
+
+type ActivityEntry = ProgressItem
+  | { kind: 'output'; container: HTMLDivElement }
+  | { kind: 'status'; text: string };
 
 @customElement('doolla-progress-tracker')
 export class DoollaProgressTracker extends LitElement {
@@ -95,12 +101,19 @@ export class DoollaProgressTracker extends LitElement {
         border-top: 1px solid var(--chat-outline);
       }
 
-      .thought-content .progress-list {
+      .thought-content .progress-item:not(.in_progress, .error) {
         background: var(--chat-surface);
       }
 
       ::slotted(*) {
         margin: var(--doolla-space-2) var(--doolla-space-3);
+      }
+
+      ::slotted(.thought-output) {
+        display: flex;
+        flex-direction: column;
+        gap: var(--doolla-space-2);
+        min-width: 0;
       }
 
       .progress-label {
@@ -264,28 +277,77 @@ export class DoollaProgressTracker extends LitElement {
   @property() theme = 'light';
   @property({ type: Boolean, reflect: true }) collapsible = false;
   @property({ type: Boolean }) running = false;
-  @property() activity = '';
-  @state() private items: ProgressItem[] = [];
+  @state() private entries: ActivityEntry[] = [];
+  private nextId = 0;
+  private readonly outputObserver = new MutationObserver(() => this.syncActivityVisibility());
+
+  connectedCallback() {
+    super.connectedCallback();
+    this.outputObserver.observe(this, { childList: true });
+    for (const entry of this.entries) {
+      if (entry.kind === 'output') this.outputObserver.observe(entry.container, { childList: true });
+    }
+  }
+
+  disconnectedCallback() {
+    this.outputObserver.disconnect();
+    super.disconnectedCallback();
+  }
+
+  @property()
+  get activity(): string {
+    return this.entries.find(entry => entry.kind === 'status')?.text ?? '';
+  }
+
+  set activity(text: string) {
+    const entries = this.entries.filter(entry => entry.kind !== 'status');
+    this.entries = text ? [...entries, { kind: 'status', text }] : entries;
+  }
+
+  // Keep rich components in light DOM so their renderers retain state and handlers.
+  // Named slots place each run of output where it arrived among the task events.
+  getActivityContainer(): HTMLElement {
+    const last = this.entries[this.entries.length - 1];
+    if (last?.kind === 'output') return last.container;
+
+    const container = this.ownerDocument.createElement('div');
+    container.className = 'thought-output';
+    container.setAttribute('role', 'listitem');
+    container.slot = `activity-${++this.nextId}`;
+    this.append(container);
+    if (this.isConnected) this.outputObserver.observe(container, { childList: true });
+    this.entries = [...this.entries, { kind: 'output', container }];
+    return container;
+  }
 
   addItem(text: string, detail?: string, id?: string, status: ProgressItem['status'] = 'pending'): string {
-    const itemId = id || Date.now().toString();
-    const item = { id: itemId, text, status, detail };
-    this.items = [...this.items.filter(existing => existing.id !== itemId), item];
+    const itemId = id || `task-${++this.nextId}`;
+    const item: ProgressItem = { kind: 'task', id: itemId, text, status, detail };
+    const index = this.entries.findIndex(entry => entry.kind === 'task' && entry.id === itemId);
+    if (index === -1) {
+      this.entries = [...this.entries, item];
+    } else {
+      const next = [...this.entries];
+      next[index] = item;
+      this.entries = next;
+    }
     return itemId;
   }
 
   updateItem(id: string, status?: ProgressItem['status'], detail?: string) {
-    this.items = this.items.map(item =>
-      item.id === id ? { ...item, status: status ?? item.status, detail: detail ?? item.detail } : item
+    this.entries = this.entries.map(entry =>
+      entry.kind === 'task' && entry.id === id
+        ? { ...entry, status: status ?? entry.status, detail: detail ?? entry.detail }
+        : entry
     );
   }
 
   removeItem(id: string) {
-    this.items = this.items.filter(item => item.id !== id);
+    this.entries = this.entries.filter(entry => entry.kind !== 'task' || entry.id !== id);
   }
 
   clearItems() {
-    this.items = [];
+    this.entries = this.entries.filter(entry => entry.kind !== 'task');
   }
 
   private getStatusIcon(status: ProgressItem['status']) {
@@ -310,9 +372,9 @@ export class DoollaProgressTracker extends LitElement {
   }
 
   interrupt() {
-    this.items = this.items.map(item => item.status === 'in_progress'
-      ? { ...item, status: 'error', detail: '连接中断' }
-      : item);
+    this.entries = this.entries.map(entry => entry.kind === 'task' && entry.status === 'in_progress'
+      ? { ...entry, status: 'error', detail: '连接中断' }
+      : entry);
   }
 
   protected updated() {
@@ -320,11 +382,13 @@ export class DoollaProgressTracker extends LitElement {
   }
 
   private syncActivityVisibility() {
-    this.toggleAttribute('has-activity', !!(this.items.length || this.activity || this.children.length));
+    const hasActivity = this.entries.some(entry => entry.kind !== 'output' || entry.container.childElementCount);
+    const hasDirectOutput = Array.from(this.children).some(child => !child.slot);
+    this.toggleAttribute('has-activity', hasActivity || hasDirectOutput);
   }
 
-  private renderItems() {
-    return this.items.map(item => html`
+  private renderItem(item: ProgressItem) {
+    return html`
       <div class="progress-item ${item.status}" role="listitem">
         <div class="progress-icon ${item.status}" aria-label=${item.status.replace('_', ' ')} role="img">
           ${this.getStatusIcon(item.status)}
@@ -334,15 +398,27 @@ export class DoollaProgressTracker extends LitElement {
           ${item.detail ? html`<p class="progress-detail">${item.detail}</p>` : ''}
         </div>
       </div>
-    `);
+    `;
+  }
+
+  private renderActivity(entry: ActivityEntry) {
+    switch (entry.kind) {
+      case 'task':
+        return this.renderItem(entry);
+      case 'output':
+        return html`<slot name=${entry.container.slot}></slot>`;
+      case 'status':
+        return html`<p class="thought-activity" role="listitem">${entry.text}</p>`;
+    }
   }
 
   render() {
+    const items = this.entries.filter(entry => entry.kind === 'task');
     if (this.collapsible) {
-      const failures = this.items.filter(item => item.status === 'error').length;
+      const failures = items.filter(item => item.status === 'error').length;
       const state = failures ? 'error' : this.running ? 'running' : '';
       const summary = failures ? `${failures} 个步骤失败`
-        : this.running ? '进行中' : this.items.length ? `${this.items.length} 个步骤` : '';
+        : this.running ? '进行中' : items.length ? `${items.length} 个步骤` : '';
       return html`
         <details>
           <summary class="thought-summary">
@@ -353,28 +429,31 @@ export class DoollaProgressTracker extends LitElement {
             <span class="thought-label">思考过程</span>
             <span class="thought-meta ${state}">${summary}</span>
           </summary>
-          <div class="thought-content">
-            ${this.activity ? html`<p class="thought-activity">${this.activity}</p>` : ''}
-            ${this.items.length ? html`<div class="progress-list" role="list">${this.renderItems()}</div>` : ''}
-            <slot @slotchange=${this.syncActivityVisibility}></slot>
+          <div class="thought-content" role="list">
+            ${repeat(
+              this.entries,
+              entry => entry.kind === 'task' ? `task:${entry.id}` : entry.kind === 'output' ? entry.container : 'status',
+              entry => this.renderActivity(entry)
+            )}
+            <slot></slot>
           </div>
         </details>
       `;
     }
 
-    const completed = this.items.filter(item => item.status === 'completed').length;
+    const completed = items.filter(item => item.status === 'completed').length;
     return html`
-      ${this.items.length > 0 ? html`
+      ${items.length > 0 ? html`
         <div class="progress-label">
           <span class="progress-label-text">Tasks</span>
-          <span class="progress-summary">${completed}/${this.items.length} completed</span>
+          <span class="progress-summary">${completed}/${items.length} completed</span>
         </div>
       ` : ''}
 
       <div class="progress-list" role="list">
-        ${this.items.length === 0
+        ${items.length === 0
           ? html`<div class="empty-state">No tasks yet</div>`
-          : this.renderItems()}
+          : items.map(item => this.renderItem(item))}
       </div>
     `;
   }

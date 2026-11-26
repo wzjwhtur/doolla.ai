@@ -266,7 +266,7 @@ export class DoollaChat extends LitElement {
         gap: var(--doolla-space-2);
       }
 
-      .assistant-reply:not(:has(.assistant-content > *, doolla-progress-tracker[has-activity], doolla-progress-tracker > *)),
+      .assistant-reply:not(:has(.assistant-content > *, doolla-progress-tracker[has-activity])),
       :host(:not([show-progress])) .assistant-reply:not(:has(.assistant-content > *)),
       :host(:not([show-progress])) .assistant-reply doolla-progress-tracker {
         display: none;
@@ -297,7 +297,7 @@ export class DoollaChat extends LitElement {
         width: min(100%, 420px);
       }
 
-      .assistant-reply doolla-progress-tracker:has(> .rich-dataframe, > .rich-text .text-code) {
+      .assistant-reply doolla-progress-tracker:has(.rich-dataframe, .rich-text .text-code) {
         width: 100%;
       }
 
@@ -310,12 +310,12 @@ export class DoollaChat extends LitElement {
       }
 
       .assistant-content > .rich-component,
-      doolla-progress-tracker > .rich-component {
+      doolla-progress-tracker .thought-output > .rich-component {
         min-width: 0;
         margin-bottom: 0;
       }
 
-      doolla-progress-tracker > .rich-component {
+      doolla-progress-tracker .thought-output > .rich-component {
         --doolla-background-root: var(--chat-surface);
         --doolla-background-default: var(--chat-surface);
         --doolla-background-higher: var(--chat-muted);
@@ -332,7 +332,7 @@ export class DoollaChat extends LitElement {
       }
 
       .assistant-content > .rich-text,
-      doolla-progress-tracker > .rich-text {
+      doolla-progress-tracker .thought-output > .rich-text {
         align-self: flex-start;
         max-width: 100%;
         padding: var(--doolla-space-3) var(--doolla-space-4);
@@ -902,7 +902,8 @@ export class DoollaChat extends LitElement {
       // Both transports use the row reserved when the request was sent.
       reply ??= this.createAssistantReply();
       const inActivity = component?.data?.chat_section === 'activity' && (this.showProgress || type !== 'dataframe');
-      const container = inActivity ? reply?.tracker : reply?.content;
+      const container = inActivity && update.operation === 'create'
+        ? reply?.tracker.getActivityContainer() : reply?.content;
       this.componentManager?.processUpdate(update, { container, taskTracker: reply?.tracker });
     };
 
@@ -996,7 +997,7 @@ export class DoollaChat extends LitElement {
     if (emptyState && richContainer) {
       // Show empty state if rich container has no children
       emptyState.hidden = !!richContainer.querySelector(
-        ':scope > :not(style, .assistant-reply), .assistant-content > *, doolla-progress-tracker[has-activity], doolla-progress-tracker > *'
+        ':scope > :not(style, .assistant-reply), .assistant-content > *, doolla-progress-tracker[has-activity]'
       );
     }
   }
