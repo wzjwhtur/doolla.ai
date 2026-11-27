@@ -48,21 +48,58 @@ func (w weaviate) search(ctx context.Context, q query) ([]match, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Legacy text rows store the marker in metadata_json. Empty tool_name
-	// comparisons have no tokens in existing word-tokenized Weaviate schemas.
-	marker := strconv.Quote(`{"is_text_memory": true}`)
-	compactMarker := strconv.Quote(`{"is_text_memory":true}`)
-	metadataFilter := func(operator, value string) string {
-		return `{path:["metadata_json"],operator:` + operator + `,valueText:` + value + `}`
+	// The legacy word tokenizer cannot filter reliably on the empty string.
+	// Rank candidates on the server, then classify by the stored tool name.
+	where := ""
+	if q.Kind == "tool" {
+		predicate := `{path:["success"],operator:Equal,valueBoolean:true}`
+		if q.ToolName != "" {
+			predicate = `{operator:And,operands:[` + predicate + `,{path:["tool_name"],operator:Equal,valueText:` + strconv.Quote(q.ToolName) + `}]}`
+		}
+		where = ",where:" + predicate
 	}
-	where := `{operator:And,operands:[{path:["success"],operator:Equal,valueBoolean:true},` + metadataFilter("NotEqual", marker) + `,` + metadataFilter("NotEqual", compactMarker) + `]}`
-	if q.Kind == "text" {
-		where = `{operator:Or,operands:[` + metadataFilter("Equal", marker) + `,` + metadataFilter("Equal", compactMarker) + `]}`
+	var out []match
+	seen := make(map[string]bool)
+	pageSize := max(q.Limit, 32)
+	for offset := 0; ; offset += pageSize {
+		gql := fmt.Sprintf("{Get{%s(nearVector:{vector:%s}%s,limit:%d,offset:%d){question tool_name args_json metadata_json timestamp success _additional{id distance}}}}", w.Collection, encoded, where, pageSize, offset)
+		page, err := w.searchPage(ctx, gql)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range page {
+			a, _ := d["_additional"].(map[string]any)
+			dist, ok := numeric(a["distance"])
+			if !ok {
+				return nil, fmt.Errorf("Weaviate result missing distance")
+			}
+			score := 1 - dist
+			if score < q.Threshold {
+				return out, nil
+			}
+			name := stringField(d, "tool_name")
+			if (name == "") != (q.Kind == "text") || (q.ToolName != "" && name != q.ToolName) {
+				continue
+			}
+			id := stringField(a, "id")
+			if seen[id] {
+				continue
+			}
+			if err := collect(&out, id, unpackToolDocument(d), score); err != nil {
+				return nil, err
+			}
+			seen[id] = true
+			if len(out) == q.Limit {
+				return out, nil
+			}
+		}
+		if len(page) < pageSize {
+			return out, nil
+		}
 	}
-	if q.ToolName != "" {
-		where = `{operator:And,operands:[` + where + `,{path:["tool_name"],operator:Equal,valueText:` + strconv.Quote(q.ToolName) + `}]}`
-	}
-	gql := fmt.Sprintf("{Get{%s(nearVector:{vector:%s},where:%s,limit:%d){question tool_name args_json metadata_json timestamp success _additional{id distance}}}}", w.Collection, encoded, where, q.Limit)
+}
+
+func (w weaviate) searchPage(ctx context.Context, gql string) ([]fields, error) {
 	var res struct {
 		Data   struct{ Get map[string][]fields }
 		Errors []struct{ Message string }
@@ -73,18 +110,7 @@ func (w weaviate) search(ctx context.Context, q query) ([]match, error) {
 	if len(res.Errors) > 0 {
 		return nil, fmt.Errorf("Weaviate search: %s", res.Errors[0].Message)
 	}
-	var out []match
-	for _, d := range res.Data.Get[w.Collection] {
-		a, _ := d["_additional"].(map[string]any)
-		dist, ok := numeric(a["distance"])
-		if !ok {
-			return nil, fmt.Errorf("Weaviate result missing distance")
-		}
-		if err := collect(&out, stringField(a, "id"), d, 1-dist); err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
+	return res.Data.Get[w.Collection], nil
 }
 func (w weaviate) scan(ctx context.Context, fn func(entry) error) error {
 	params := url.Values{"class": {w.Collection}, "limit": {"100"}}
@@ -94,7 +120,7 @@ func (w weaviate) scan(ctx context.Context, fn func(entry) error) error {
 			return err
 		}
 		for _, o := range res.Objects {
-			if err := visit(o.ID, o.Properties, fn); err != nil {
+			if err := visit(o.ID, unpackToolDocument(o.Properties), fn); err != nil {
 				return err
 			}
 		}
@@ -109,7 +135,7 @@ func (w weaviate) get(ctx context.Context, id string) (*entry, error) {
 	if err := w.call(ctx, "GET", "/v1/objects/"+w.Collection+"/"+url.PathEscape(id), nil, &o); err != nil {
 		return nil, err
 	}
-	return first(o.Properties, id)
+	return first(unpackToolDocument(o.Properties), id)
 }
 func (w weaviate) remove(ctx context.Context, id string) error {
 	return w.call(ctx, "DELETE", "/v1/objects/"+w.Collection+"/"+url.PathEscape(id), nil, nil)

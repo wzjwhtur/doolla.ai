@@ -232,6 +232,25 @@ func TestLiveMilvus(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkLifecycle(t, s)
+	// Legacy text rows can have neither a metadata marker nor JSON arguments.
+	raw := milvus{&remote{Config: cfg}}
+	raw.HTTPClient = http.DefaultClient
+	_, err = raw.request(t.Context(), "upsert", fields{"data": []fields{{
+		"id": "old-note", "question": "legacy", "tool_name": "", "args_json": "",
+		"metadata_json": "", "timestamp": "", "success": true, "embedding": legacyVector("legacy", cfg.Dimension),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := s.Recent(t.Context(), "tool", 1)
+	if err != nil || len(tools) != 0 {
+		t.Fatalf("recent tools: %+v %v", tools, err)
+	}
+	hits, err := s.Search(t.Context(), query{Kind: "text", Text: "legacy", Limit: 1})
+	if err != nil || len(hits) != 1 || hits[0].Memory.Content != "legacy" {
+		t.Fatalf("legacy note: %+v %v", hits, err)
+	}
+
 }
 func TestLiveChroma(t *testing.T) {
 	if os.Getenv("DOOLLA_TEST_CHROMA_URL") == "" {

@@ -70,6 +70,16 @@ func packedToolDocument(e entry) (fields, error) {
 	}
 	return d, nil
 }
+
+// In the shared Milvus/Weaviate schema an empty tool_name is the type
+// discriminator, including for historical rows without a metadata marker.
+func unpackToolDocument(d fields) fields {
+	if d != nil && stringField(d, "tool_name") == "" {
+		d["is_text_memory"] = true
+	}
+	return d
+}
+
 func (m milvus) search(ctx context.Context, q query) ([]match, error) {
 	v, err := m.vector(ctx, q.Text)
 	if err != nil {
@@ -89,7 +99,7 @@ func (m milvus) search(ctx context.Context, q query) ([]match, error) {
 	var out []match
 	for _, d := range rows {
 		score, _ := numeric(d["distance"])
-		if err := collect(&out, "", d, score); err != nil {
+		if err := collect(&out, "", unpackToolDocument(d), score); err != nil {
 			return nil, err
 		}
 	}
@@ -102,7 +112,7 @@ func (m milvus) scan(ctx context.Context, fn func(entry) error) error {
 			return err
 		}
 		for _, d := range rows {
-			if err := visit("", d, fn); err != nil {
+			if err := visit("", unpackToolDocument(d), fn); err != nil {
 				return err
 			}
 		}
@@ -116,7 +126,7 @@ func (m milvus) get(ctx context.Context, id string) (*entry, error) {
 	if err != nil || len(rows) == 0 {
 		return nil, err
 	}
-	return first(rows[0], id)
+	return first(unpackToolDocument(rows[0]), id)
 }
 func (m milvus) remove(ctx context.Context, id string) error {
 	_, err := m.request(ctx, "delete", fields{"filter": "id == " + strconv.Quote(id)})

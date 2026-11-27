@@ -135,3 +135,59 @@ func TestLivePremium(t *testing.T) {
 		t.Fatalf("delete saved record: %v %v", ok, err)
 	}
 }
+
+// Legacy Python classes use word tokenization; Go provisions field tokenization.
+// Both store the record type in tool_name, independently of user metadata.
+func TestLiveWeaviatePackedKinds(t *testing.T) {
+	endpoint := os.Getenv("DOOLLA_TEST_WEAVIATE_URL")
+	if endpoint == "" {
+		t.Skip("set DOOLLA_TEST_WEAVIATE_URL to test both schemas")
+	}
+	for _, tokenizer := range []string{"word", "field"} {
+		t.Run(tokenizer, func(t *testing.T) {
+			ctx := t.Context()
+			cfg := Config{Provider: "weaviate", Endpoint: endpoint, APIKey: os.Getenv("DOOLLA_TEST_WEAVIATE_KEY"), Collection: fmt.Sprintf("Packed%d", time.Now().UnixNano()), Dimension: 2, HTTPClient: &http.Client{Timeout: 30 * time.Second}, Provision: tokenizer == "field"}
+			cfg.Embed = func(_ context.Context, _ string) ([]float32, error) { return []float32{1, 0}, nil }
+			r := remote{Config: cfg}
+			if tokenizer == "word" {
+				props := []fields{{"name": "success", "dataType": []string{"boolean"}}}
+				for _, name := range []string{"question", "tool_name", "args_json", "metadata_json", "timestamp"} {
+					props = append(props, fields{"name": name, "dataType": []string{"text"}, "tokenization": tokenizer})
+				}
+				if err := r.call(ctx, "POST", "/v1/schema", fields{"class": cfg.Collection, "vectorizer": "none", "properties": props}, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s, err := Open(ctx, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := r.call(context.Background(), "DELETE", "/v1/schema/"+cfg.Collection, nil, nil); err != nil {
+					t.Error(err)
+				}
+			})
+			if err := s.Save(ctx, entry{Kind: "tool", ToolName: "run_sql", Question: "tool", Success: true, Metadata: fields{"is_text_memory": true}}); err != nil {
+				t.Fatal(err)
+			}
+			for _, meta := range []string{`{"source":"import","is_text_memory":true}`, ""} {
+				if err := r.call(ctx, "POST", "/v1/objects", fields{"class": cfg.Collection, "properties": fields{"tool_name": "", "question": "imported", "args_json": "", "metadata_json": meta, "success": true}, "vector": []float32{0.9, 0.1}}, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, tc := range []struct {
+				kind string
+				n    int
+			}{{"tool", 1}, {"text", 2}} {
+				hits, err := s.Search(ctx, query{Kind: tc.kind, Text: "probe", Limit: tc.n})
+				if err != nil || len(hits) != tc.n {
+					t.Errorf("search %s: %+v %v", tc.kind, hits, err)
+				}
+				recent, err := s.Recent(ctx, tc.kind, 10)
+				if err != nil || len(recent) != tc.n {
+					t.Errorf("recent %s: %+v %v", tc.kind, recent, err)
+				}
+			}
+		})
+	}
+}

@@ -14,12 +14,14 @@ func TestMixedPackedTextMemories(t *testing.T) {
 		{"milvus", "/v2/vectordb/entities/upsert", `{"code":0}`, "/v2/vectordb/entities/query",
 			`{"code":0,"data":[
 				{"id":"legacy","question":"legacy fact","tool_name":"","args_json":"","metadata_json":"{\"is_text_memory\": true}"},
+				{"id":"unmarked","question":"old note","tool_name":"","args_json":"","metadata_json":""},
 				{"id":"new","question":"new fact","tool_name":"","args_json":"{}","metadata_json":"{\"is_text_memory\":true}"},
 				{"id":"tool","question":"count","tool_name":"run_sql","args_json":"{\"sql\":\"SELECT 1\"}"}
 			]}`},
 		{"weaviate", "/v1/batch/objects", `[{"result":{"status":"SUCCESS"}}]`, "/v1/objects",
 			`{"objects":[
 				{"id":"legacy","properties":{"question":"legacy fact","tool_name":"","args_json":"","metadata_json":"{\"is_text_memory\": true}"}},
+				{"id":"unmarked","properties":{"question":"old note","tool_name":"","args_json":"","metadata_json":""}},
 				{"id":"new","properties":{"question":"new fact","tool_name":"","args_json":"{}","metadata_json":"{\"is_text_memory\":true}"}},
 				{"id":"tool","properties":{"question":"count","tool_name":"run_sql","args_json":"{\"sql\":\"SELECT 1\"}"}}
 			]}`},
@@ -57,7 +59,7 @@ func TestMixedPackedTextMemories(t *testing.T) {
 				t.Fatal("text memory was not written")
 			}
 			texts, err := store.Recent(ctx, "text", 10)
-			if err != nil || len(texts) != 2 || texts[0].Content != "legacy fact" || texts[1].Content != "new fact" {
+			if err != nil || len(texts) != 3 || texts[0].Content != "legacy fact" || texts[1].Content != "new fact" || texts[2].Content != "old note" {
 				t.Fatalf("recent text memories: %+v, error: %v", texts, err)
 			}
 			tools, err := store.Recent(ctx, "tool", 10)
@@ -298,5 +300,47 @@ func TestWeaviateCursor(t *testing.T) {
 	rows, err := s.Recent(t.Context(), "tool", 200)
 	if err != nil || len(rows) != 100 {
 		t.Fatal(len(rows), err)
+	}
+}
+
+func TestWeaviateSearchContinuesPastOtherKinds(t *testing.T) {
+	const target = "target"
+	pages := 0
+	client := &http.Client{Transport: roundTrip(func(req *http.Request) (*http.Response, error) {
+		var body struct{ Query string }
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		var docs []fields
+		switch pages {
+		case 0:
+			if !strings.Contains(body.Query, "offset:0") {
+				t.Fatal(body.Query)
+			}
+			for i := 0; i < 32; i++ {
+				docs = append(docs, fields{"tool_name": "", "question": "note", "_additional": fields{"id": strconv.Itoa(i), "distance": 0}})
+			}
+		case 1:
+			if !strings.Contains(body.Query, "offset:32") {
+				t.Fatal(body.Query)
+			}
+			docs = []fields{{"question": "count", "tool_name": "run_sql", "success": true, "metadata_json": `{"is_text_memory":true}`, "_additional": fields{"id": target, "distance": 0.1}}}
+		default:
+			t.Fatal("unexpected page")
+		}
+		pages++
+		b, err := json.Marshal(fields{"data": fields{"Get": fields{"ToolMemory": docs}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response(200, string(b)), nil
+	})}
+	s, err := Open(t.Context(), Config{Provider: "weaviate", Endpoint: "http://test.invalid", HTTPClient: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hits, err := s.Search(t.Context(), query{Kind: "tool", Text: "count", Limit: 1, Threshold: 0.8})
+	if err != nil || len(hits) != 1 || hits[0].Memory.ID != target || hits[0].Rank != 1 {
+		t.Fatalf("hits=%+v err=%v", hits, err)
 	}
 }
