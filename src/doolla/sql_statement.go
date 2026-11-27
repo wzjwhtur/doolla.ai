@@ -39,7 +39,12 @@ func trimSQLTerminator(statement string) string {
 // top-level SQL keywords. Unknown statements take the result-set path.
 func commandWithoutRows(query string) bool {
 	words := topLevelWords(query)
-	if len(words) == 0 || words[0] == "EXPLAIN" {
+	if len(words) == 0 {
+		return false
+	}
+	// MySQL also accepts DESCRIBE and DESC when explaining a DML statement.
+	switch words[0] {
+	case "EXPLAIN", "DESCRIBE", "DESC":
 		return false
 	}
 	dml := false

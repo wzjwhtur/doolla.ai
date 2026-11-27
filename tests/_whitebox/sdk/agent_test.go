@@ -380,6 +380,17 @@ func TestToolHistorySurvivesDeliveryFailure(t *testing.T) {
 	}
 }
 
+func TestMySQLDescribeDMLReturnsRows(t *testing.T) {
+	for _, query := range []string{
+		"DESCRIBE UPDATE sales SET value=1",
+		"DESC DELETE FROM sales WHERE id=1",
+	} {
+		if commandWithoutRows(query) {
+			t.Errorf("%q should return an execution plan", query)
+		}
+	}
+}
+
 func TestExplainUpdateReturnsQueryPlan(t *testing.T) {
 	db, err := OpenWritableSQLite(sampleDatabase(t))
 	if err != nil {
