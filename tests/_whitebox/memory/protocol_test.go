@@ -9,6 +9,65 @@ import (
 	"testing"
 )
 
+func TestMixedPackedTextMemories(t *testing.T) {
+	for _, tc := range []struct{ provider, writePath, writeReply, listPath, listReply string }{
+		{"milvus", "/v2/vectordb/entities/upsert", `{"code":0}`, "/v2/vectordb/entities/query",
+			`{"code":0,"data":[
+				{"id":"legacy","question":"legacy fact","tool_name":"","args_json":"","metadata_json":"{\"is_text_memory\": true}"},
+				{"id":"new","question":"new fact","tool_name":"","args_json":"{}","metadata_json":"{\"is_text_memory\":true}"},
+				{"id":"tool","question":"count","tool_name":"run_sql","args_json":"{\"sql\":\"SELECT 1\"}"}
+			]}`},
+		{"weaviate", "/v1/batch/objects", `[{"result":{"status":"SUCCESS"}}]`, "/v1/objects",
+			`{"objects":[
+				{"id":"legacy","properties":{"question":"legacy fact","tool_name":"","args_json":"","metadata_json":"{\"is_text_memory\": true}"}},
+				{"id":"new","properties":{"question":"new fact","tool_name":"","args_json":"{}","metadata_json":"{\"is_text_memory\":true}"}},
+				{"id":"tool","properties":{"question":"count","tool_name":"run_sql","args_json":"{\"sql\":\"SELECT 1\"}"}}
+			]}`},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			var wroteText bool
+			client := &http.Client{Transport: roundTrip(func(req *http.Request) (*http.Response, error) {
+				switch req.URL.Path {
+				case tc.writePath:
+					var body json.RawMessage
+					if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+						t.Fatal(err)
+					}
+					if !strings.Contains(string(body), `"args_json":"{}"`) {
+						t.Errorf("new text memory must store an empty JSON object: %s", body)
+					}
+					wroteText = true
+					return response(200, tc.writeReply), nil
+				case tc.listPath:
+					return response(200, tc.listReply), nil
+				default:
+					t.Fatalf("unexpected request: %s %s", req.Method, req.URL)
+					return nil, nil
+				}
+			})}
+			ctx := t.Context()
+			store, err := Open(ctx, Config{Provider: tc.provider, Endpoint: "https://test.invalid", HTTPClient: client, Dimension: 2})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Save(ctx, entry{ID: "new", Kind: "text", Content: "new fact"}); err != nil {
+				t.Fatal(err)
+			}
+			if !wroteText {
+				t.Fatal("text memory was not written")
+			}
+			texts, err := store.Recent(ctx, "text", 10)
+			if err != nil || len(texts) != 2 || texts[0].Content != "legacy fact" || texts[1].Content != "new fact" {
+				t.Fatalf("recent text memories: %+v, error: %v", texts, err)
+			}
+			tools, err := store.Recent(ctx, "tool", 10)
+			if err != nil || len(tools) != 1 || tools[0].Args["sql"] != "SELECT 1" {
+				t.Fatalf("recent tool memories: %+v, error: %v", tools, err)
+			}
+		})
+	}
+}
+
 // The fixtures include both storage schemas used by the Python adapters:
 // nested JSON objects and flat metadata with string-encoded JSON columns.
 func TestRemoteMutationAndEnumeration(t *testing.T) {

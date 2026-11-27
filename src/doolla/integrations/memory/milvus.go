@@ -64,7 +64,8 @@ func packedToolDocument(e entry) (fields, error) {
 		d["question"] = e.Content
 		d["tool_name"] = ""
 		d["success"] = true
-		d["args_json"] = ""
+		// Other clients decode this field as JSON even for text memories.
+		d["args_json"] = "{}"
 		d["metadata_json"] = `{"is_text_memory":true}`
 	}
 	return d, nil
