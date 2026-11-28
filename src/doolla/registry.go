@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -13,8 +14,9 @@ import (
 
 type registeredTool struct {
 	Registration
-	spec   ToolSpec
-	schema *jsonschema.Resolved
+	spec       ToolSpec
+	schema     *jsonschema.Resolved
+	properties map[string]*jsonschema.Schema
 }
 
 // ToolRegistry validates model arguments and applies the caller's access groups
@@ -56,7 +58,7 @@ func (r *ToolRegistry) Register(tools ...Registration) error {
 			return fmt.Errorf("tool %s: %w", spec.Name, err)
 		}
 		t.Groups = slices.Clone(t.Groups)
-		add[spec.Name] = registeredTool{t, spec, resolved}
+		add[spec.Name] = registeredTool{t, spec, resolved, schema.Properties}
 		order = append(order, spec.Name)
 	}
 	if r.entries == nil {
@@ -112,7 +114,41 @@ func (t registeredTool) validate(args json.RawMessage) error {
 	}
 	return t.schema.Validate(obj)
 }
+
+// Some compatible models spell top-level parameters as Python keyword arguments.
+// Preserve unknown or explicitly declared keys and raw nested JSON (including large integers).
+func (t registeredTool) normalizeArgs(args json.RawMessage) (json.RawMessage, error) {
+	if !strings.Contains(string(args), "=") || len(t.properties) == 0 {
+		return args, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(args, &fields); err != nil {
+		return args, nil // The regular schema validator reports invalid arguments.
+	}
+	changed := false
+	for key, value := range fields {
+		name, alias := strings.CutSuffix(key, "=")
+		if !alias || t.properties[key] != nil || t.properties[name] == nil {
+			continue
+		}
+		if _, exists := fields[name]; exists {
+			return nil, fmt.Errorf("conflicting tool arguments %q and %q", name, key)
+		}
+		fields[name] = value
+		delete(fields, key)
+		changed = true
+	}
+	if !changed {
+		return args, nil
+	}
+	return json.Marshal(fields)
+}
+
 func (r *ToolRegistry) prepare(ctx context.Context, user User, t registeredTool, args json.RawMessage) (json.RawMessage, error) {
+	args, err := t.normalizeArgs(args)
+	if err != nil {
+		return nil, err
+	}
 	if err := t.validate(args); err != nil {
 		return nil, err
 	}

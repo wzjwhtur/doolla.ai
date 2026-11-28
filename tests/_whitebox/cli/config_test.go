@@ -179,7 +179,7 @@ func TestRecallConfiguration(t *testing.T) {
 	if err := applyConfig(flags, configFile(t, "memory-text-limit: 3\nmemory-text-threshold: 0.8")); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyRecallEnv(flags); err != nil {
+	if err := applyTypedEnv(flags); err != nil {
 		t.Fatal(err)
 	}
 	if *textLimit != 3 || *textThreshold != 0 || *toolThreshold != 0.9 {
@@ -213,4 +213,50 @@ func TestSamplingTemperatureConfig(t *testing.T) {
 	check([]string{"-config", path}, false)
 	check([]string{"-config", path, "-temperature", "0"}, false)
 	check([]string{"-config", path, "-temperature", "2.1"}, true)
+}
+
+func TestEmbeddingCacheHTTPAndLocalStore(t *testing.T) {
+	calls := map[string]int{}
+	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct{ Model, Input string }
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Model != "embed-test" {
+			t.Errorf("embedding request %+v: %v", req, err)
+		}
+		calls[req.Input]++
+		if req.Input == "retry" && calls[req.Input] == 1 {
+			http.Error(w, "temporary error", 503)
+			return
+		}
+		io.WriteString(w, `{"data":[{"embedding":[1,0]}]}`)
+	}))
+	defer service.Close()
+	ctx := t.Context()
+	dir := t.TempDir()
+	opts := memoryOptions{config: memory.Config{Provider: "qdrant", Dimension: 2, EmbedCacheSize: 1}, qdrantDir: dir}
+	store, err := opts.open(ctx, flag.NewFlagSet("test", flag.ContinueOnError), dir, embeddingOptions{model: "embed-test", url: service.URL}, memory.Open)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.(io.Closer).Close()
+	if err := store.Save(ctx, doolla.MemoryEntry{ID: "4f382895-26dc-4d22-94fb-32cecf198ab9", Kind: "text", Content: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	search := func(text string) error {
+		_, err := store.Search(ctx, doolla.MemoryQuery{Kind: "text", Text: text, Limit: 1})
+		return err
+	}
+	for _, text := range []string{"hello", "hello", "new", "hello"} {
+		if err := search(text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := search("retry"); err == nil {
+		t.Fatal("embedding service failure was hidden")
+	}
+	if err := search("retry"); err != nil {
+		t.Fatal(err)
+	}
+	if calls["hello"] != 2 || calls["new"] != 1 || calls["retry"] != 2 {
+		t.Fatal(calls)
+	}
 }

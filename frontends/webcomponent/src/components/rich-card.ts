@@ -257,34 +257,12 @@ export class RichCard extends LitElement {
     `;
   }
 
-  private async _handleAction(action: string) {
-    console.log('🔘 Card action button clicked (rich-card)');
-    console.log('   Action:', action);
-
-    // Dispatch event for any listeners
+  private _handleAction(action: string) {
     this.dispatchEvent(new CustomEvent('card-action', {
       detail: { action },
       bubbles: true,
-      composed: true
+      composed: true,
     }));
-
-    // Also directly send to doolla-chat
-    const doollaChat = document.querySelector('doolla-chat') as any;
-    if (doollaChat && typeof doollaChat.sendMessage === 'function') {
-      console.log('   Found doolla-chat, sending message...');
-      try {
-        const success = await doollaChat.sendMessage(action);
-        if (success) {
-          console.log('   ✅ Action sent successfully');
-        } else {
-          console.error('   ❌ Failed to send action');
-        }
-      } catch (error) {
-        console.error('   ❌ Error sending action:', error);
-      }
-    } else {
-      console.warn('   ⚠️ doolla-chat component not found or sendMessage not available');
-    }
   }
 }
 

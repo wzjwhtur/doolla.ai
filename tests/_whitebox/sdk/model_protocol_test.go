@@ -85,7 +85,7 @@ func TestModelProviderProtocols(t *testing.T) {
 						return nil, err
 					}
 					requests = append(requests, string(data))
-					wantDefault := fixture.provider == "azure" || fixture.provider == "anthropic" || fixture.provider == "gemini" || fixture.provider == "ollama"
+					wantDefault := fixture.provider == "anthropic" || fixture.provider == "gemini" || fixture.provider == "ollama"
 					if strings.Contains(string(data), `"temperature":0.7`) != wantDefault {
 						t.Errorf("unexpected default temperature for %s: %s", fixture.provider, data)
 					}

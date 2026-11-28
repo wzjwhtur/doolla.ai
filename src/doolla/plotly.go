@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"maps"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -129,6 +130,15 @@ func (t VisualizationTool) run(ctx context.Context, u User, raw json.RawMessage,
 	dataFields["title"] = args.Title
 	dataFields["config"] = map[string]any{"data_shape": map[string]int{"rows": len(rows) - 1, "columns": len(rows[0])}, "source_file": filename}
 	summary := i18n.T(ctx, "server.chart.created", len(rows)-1, filename)
+	for _, result := range results {
+		if result.filename == filename && result.truncated {
+			notice := i18n.T(ctx, "server.query.limited", len(rows)-1)
+			summary += "\n" + notice
+			dataFields["truncated"] = true
+			dataFields["description"] = notice
+			break
+		}
+	}
 	return ToolResult{Content: summary, Component: &Component{Type: "chart", Data: dataFields, Simple: plainToolText(summary)}, Metadata: map[string]any{"filename": filename, "rows": len(rows) - 1, "columns": len(rows[0]), "chart": chart}}, nil
 }
 
@@ -175,7 +185,7 @@ func plotlyFigure(ctx context.Context, rows [][]string, title string) (map[strin
 			}
 		}
 		switch {
-		case isNum:
+		case isNum && nonempty > 0:
 			numeric = append(numeric, i)
 		case isDate && nonempty > 0:
 			dates = append(dates, i)
@@ -268,8 +278,25 @@ func plotlyFigure(ctx context.Context, rows [][]string, title string) (map[strin
 		}
 	case len(names) >= 2:
 		traces = append(traces, map[string]any{"type": "bar", "x": cols[0], "y": cols[1]})
+	case len(names) == 1 && len(category) == 1:
+		counts := map[string]int{}
+		for _, value := range cols[category[0]] {
+			if value != nil {
+				counts[fmt.Sprint(value)]++
+			}
+		}
+		if len(counts) == 0 {
+			return nil, errors.New(i18n.T(ctx, "server.chart.empty"))
+		}
+		keys := slices.Sorted(maps.Keys(counts))
+		values := make([]int, len(keys))
+		for i, k := range keys {
+			values[i] = counts[k]
+		}
+		axes(names[category[0]], i18n.T(ctx, "server.chart.count"))
+		traces = append(traces, map[string]any{"type": "bar", "x": keys, "y": values})
 	default:
-		return nil, errors.New("no suitable chart for a single categorical column")
+		return nil, errors.New("no suitable chart for these columns")
 	}
 	return map[string]any{"data": traces, "layout": layout}, nil
 }

@@ -34,6 +34,8 @@ type Config struct {
 	// Directory selects local storage. Metric selects the FAISS distance metric.
 	Directory, Metric string
 	Dimension         int
+	// EmbedCacheSize bounds cached model vectors per store. Zero disables caching.
+	EmbedCacheSize int
 	// MarqoModel selects the server-side embedding model for a new Marqo index.
 	// An empty value uses the server default. Existing indexes keep their model.
 	MarqoModel string
@@ -66,6 +68,16 @@ var namePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // Open connects to a provisioned index using the selected provider's native API.
 // Opening a Chroma collection resolves its name to its stable UUID.
 func Open(ctx context.Context, c Config) (doolla.MemoryStore, error) {
+	if c.EmbedCacheSize < 0 {
+		return nil, errors.New("embed-cache-size must be non-negative")
+	}
+	if c.EmbedCacheSize > 0 && c.Embed != nil {
+		dimension := c.Dimension
+		if dimension == 0 {
+			dimension = 384
+		}
+		c.Embed = cacheEmbeddings(c.Embed, c.EmbedCacheSize, dimension)
+	}
 	if c.Provider == "qdrant" {
 		if c.Endpoint == "" {
 			return openQdrantLocal(ctx, c)

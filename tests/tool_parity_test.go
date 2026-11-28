@@ -148,3 +148,83 @@ func TestFileToolsOverlappingEditsAndSimpleComponents(t *testing.T) {
 	run("list_files", `{}`)
 	run("search_files", `{"query":"three"}`)
 }
+
+func TestRealSQLResultLimits(t *testing.T) {
+	db, err := doolla.OpenWritableSQLite(filepath.Join(t.TempDir(), "limits.db"))
+	if err != nil {
+		if strings.Contains(err.Error(), "requires a build with CGO_ENABLED=1") {
+			t.Skip(err)
+		}
+		t.Fatal(err)
+	}
+	defer db.Close()
+	user := doolla.User{ID: "test"}
+	for _, c := range []struct {
+		name, sql string
+		limit     doolla.SQLResultLimits
+		wantRows  int
+		truncated bool
+	}{
+		{"exact rows", "SELECT 1 UNION ALL SELECT 2", doolla.SQLResultLimits{MaxRows: 2}, 2, false},
+		{"one extra row", "SELECT 1 UNION ALL SELECT 2", doolla.SQLResultLimits{MaxRows: 1}, 1, true},
+		{"exact bytes", "SELECT '雪' AS v", doolla.SQLResultLimits{MaxBytes: 4}, 1, false},
+		{"over bytes", "SELECT '雪' AS v UNION ALL SELECT 'a'", doolla.SQLResultLimits{MaxBytes: 5}, 1, true},
+		{"first cell too large", "SELECT zeroblob(8000000) AS blob", doolla.SQLResultLimits{MaxBytes: 32}, 0, true},
+		{"partial row discarded", "SELECT 'a' AS a, 'b' AS b", doolla.SQLResultLimits{MaxBytes: 3}, 0, true},
+		{"empty", "SELECT '雪' AS v WHERE 0", doolla.SQLResultLimits{MaxRows: 1, MaxBytes: 1}, 0, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			files := doolla.Artifacts{Directory: t.TempDir()}
+			args, _ := json.Marshal(map[string]string{"sql": c.sql})
+			r, err := (doolla.SQLTool{DB: db, Artifacts: files, Limits: c.limit}).Run(t.Context(), user, args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			truncated, _ := r.Metadata["truncated"].(bool)
+			if truncated != c.truncated || r.Metadata["row_count"] != c.wantRows || (r.Component.Data["truncated"] == true) != c.truncated {
+				t.Fatalf("result=%+v", r)
+			}
+			if c.truncated && (!strings.Contains(r.Content, "total is unknown") || !strings.Contains(r.Component.Data["description"].(string), "total is unknown")) {
+				t.Fatal(r)
+			}
+			if c.wantRows == 0 && r.Metadata["output_file"] != nil {
+				t.Fatal("unexpected artifact for empty preview")
+			}
+			if c.name == "one extra row" {
+				b, err := files.Read(user, r.Metadata["output_file"].(string))
+				if err != nil || string(b) != "1\n1\n" {
+					t.Fatalf("CSV %q err=%v", b, err)
+				}
+			}
+		})
+	}
+}
+
+func TestSingleCategoricalChartCounts(t *testing.T) {
+	chart, err := doolla.PlotlyFigure([][]string{{"status"}, {"done"}, {""}, {"open"}, {"done"}}, "counts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	traces := chart["data"].([]map[string]any)
+	if len(traces) != 1 || traces[0]["type"] != "bar" || !slices.Equal(traces[0]["x"].([]string), []string{"done", "open"}) || !slices.Equal(traces[0]["y"].([]int), []int{2, 1}) {
+		t.Fatal(traces)
+	}
+}
+
+// A wrapper that applies access policy before forwarding to DatabaseRunner
+// should retain the SQLTool limits, including limits above the SDK default.
+func TestSQLToolDelegatedDatabaseRunnerLimits(t *testing.T) {
+	db, err := doolla.OpenWritableSQLite(filepath.Join(t.TempDir(), "wrapped.db"))
+	if err != nil {
+		if strings.Contains(err.Error(), "requires a build with CGO_ENABLED=1") {
+			t.Skip(err)
+		}
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tool := doolla.SQLTool{Runner: doolla.DatabaseRunner{DB: db}, Limits: doolla.SQLResultLimits{MaxRows: doolla.DefaultSQLMaxRows + 1}, DisableArtifacts: true}
+	r, err := tool.Run(t.Context(), doolla.User{}, []byte(`{"sql":"WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<1001) SELECT i FROM n"}`))
+	if err != nil || r.Metadata["row_count"] != 1001 || r.Metadata["truncated"] == true {
+		t.Fatalf("delegated rows=%v truncated=%v err=%v", r.Metadata["row_count"], r.Metadata["truncated"], err)
+	}
+}

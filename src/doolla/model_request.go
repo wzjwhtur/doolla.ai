@@ -104,7 +104,7 @@ func (m *remoteModel) generateRequest(ctx context.Context, r ModelRequest, strea
 	return configured.generate(ctx, r.withSystem(), r.Tools, stream, onText)
 }
 
-func (a *Agent) sendModel(ctx context.Context, r ModelRequest) (Message, error) {
+func (a *Agent) sendModel(ctx context.Context, r ModelRequest, onText func(string) error) (Message, error) {
 	if err := r.validate(); err != nil {
 		return Message{}, err
 	}
@@ -116,9 +116,9 @@ func (a *Agent) sendModel(ctx context.Context, r ModelRequest) (Message, error) 
 		var msg Message
 		var err error
 		if supportsFullStream {
-			msg, err = fullStream.StreamRequest(child, r, nil)
+			msg, err = fullStream.StreamRequest(child, r, onText)
 		} else {
-			msg, err = streaming.Stream(child, r.withSystem(), r.Tools, nil)
+			msg, err = streaming.Stream(child, r.withSystem(), r.Tools, onText)
 		}
 		trace.set("content_length", len([]rune(msg.Content)))
 		trace.set("tool_call_count", len(msg.ToolCalls))
@@ -135,4 +135,24 @@ func (a *Agent) sendModel(ctx context.Context, r ModelRequest) (Message, error) 
 	}
 	trace.end(err)
 	return msg, err
+}
+
+// Requests with post-generation checks or automatic retries publish only the
+// accepted text. A retry must never append a second copy of a visible prefix.
+func (a *Agent) canPreviewAnswer() bool {
+	c := &a.config
+	if c.VerifyToolAnswers || c.ConfirmSQLMemory || c.Recover != nil || len(c.Middleware) != 0 {
+		return false
+	}
+	for _, mw := range c.LLMMiddlewares {
+		if mw.AfterResponse != nil {
+			return false
+		}
+	}
+	for _, h := range c.Hooks {
+		if h.AfterMessage != nil || h.AfterConversation != nil {
+			return false
+		}
+	}
+	return true
 }

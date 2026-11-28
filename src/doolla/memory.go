@@ -261,6 +261,8 @@ func (t functionTool) Run(ctx context.Context, u User, args json.RawMessage) (To
 	return t.run(ctx, u, args)
 }
 
+type registeredMemoryTool struct{ functionTool }
+
 func MemoryTools(store MemoryStore) []Registration {
 	return MemoryToolsWithRecall(store, DefaultToolRecall())
 }
@@ -284,7 +286,22 @@ func MemoryToolsWithRecall(store MemoryStore, recall MemoryRecall) []Registratio
 			schema = objectSchema(map[string]any{"question": strField("New question"), "tool_name_filter": strField("Optional tool filter"), "limit": map[string]string{"type": "integer"}, "similarity_threshold": map[string]string{"type": "number"}}, "question")
 			groups = []string{"admin", "user"}
 		}
-		out = append(out, Registration{functionTool{ToolSpec{name, desc, schema}, func(ctx context.Context, u User, raw json.RawMessage) (ToolResult, error) {
+		out = append(out, Registration{registeredMemoryTool{functionTool{ToolSpec{name, desc, schema}, func(ctx context.Context, u User, raw json.RawMessage) (ToolResult, error) {
+			target := store
+			// An agent configured for tenant isolation must also route older
+			// registrations that captured a shared store at construction.
+			if turn, ok := CurrentTurn(ctx); ok {
+				if stores, routed := turn.Memory.(*TenantMemoryStore); routed {
+					target = stores
+				}
+			}
+			if stores, ok := target.(*TenantMemoryStore); ok {
+				var err error
+				target, err = stores.ForUser(u)
+				if err != nil {
+					return ToolResult{}, err
+				}
+			}
 			args := struct {
 				Question, Content string
 				ToolName          string `json:"tool_name"`
@@ -301,7 +318,7 @@ func MemoryToolsWithRecall(store MemoryStore, recall MemoryRecall) []Registratio
 				if args.Question == "" || search.Validate() != nil {
 					return ToolResult{}, errors.New("invalid memory search parameters")
 				}
-				matches, err := store.Search(ctx, MemoryQuery{"tool", args.Question, args.ToolFilter, args.Limit, args.Threshold})
+				matches, err := target.Search(ctx, MemoryQuery{"tool", args.Question, args.ToolFilter, args.Limit, args.Threshold})
 				if err != nil {
 					return ToolResult{}, err
 				}
@@ -331,13 +348,27 @@ func MemoryToolsWithRecall(store MemoryStore, recall MemoryRecall) []Registratio
 				}
 				e.Kind, e.Question, e.ToolName, e.Args = "tool", args.Question, args.ToolName, args.Args
 			}
-			err := store.Save(ctx, e)
+			approval, _ := ctx.Value(sqlApprovalKey{}).(*sqlApproval)
+			if approval != nil {
+				if name != "save_question_tool_args" || u.ID != approval.user || e.ToolName != "run_sql" || e.Question != approval.question || len(e.Args) != 1 || e.Args["sql"] != approval.statement {
+					return ToolResult{}, errors.New(i18n.T(ctx, "server.memory.confirm_mismatch"))
+				}
+				e.ID = approval.id
+				e.Metadata["confirmed_by"] = u.ID
+				e.Metadata["conversation_id"] = approval.conversation
+				e.Metadata["source_request_id"] = approval.request
+				e.Metadata["tool_call_id"] = approval.call
+			}
+			err := target.Save(ctx, e)
 			if err != nil {
 				return ToolResult{}, err
 			}
+			if approval != nil {
+				approval.persisted = true
+			}
 			msg := i18n.T(ctx, "server.memory.saved_id", e.ID)
 			return ToolResult{Content: msg, Component: &Component{Type: "notification", Data: map[string]any{"level": "success", "message": msg}}, Metadata: map[string]any{"memory_id": e.ID}}, nil
-		}}, groups})
+		}}}, groups})
 	}
 	return out
 }

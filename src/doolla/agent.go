@@ -116,11 +116,12 @@ type turnLock struct {
 }
 
 type Agent struct {
-	registry *ToolRegistry
-	model    Model
-	config   AgentConfig
-	mu       sync.Mutex
-	turns    map[conversationKey]*turnLock
+	confirmations *sqlConfirmations
+	registry      *ToolRegistry
+	model         Model
+	config        AgentConfig
+	mu            sync.Mutex
+	turns         map[conversationKey]*turnLock
 }
 
 func NewAgent(model Model, system string, tools ...Registration) (*Agent, error) {
@@ -160,7 +161,14 @@ func NewConfiguredAgent(model Model, config AgentConfig, tools ...Registration) 
 	if err := registry.Register(tools...); err != nil {
 		return nil, err
 	}
-	return &Agent{registry: registry, model: model, config: config, turns: make(map[conversationKey]*turnLock)}, nil
+	a := &Agent{registry: registry, model: model, config: config, turns: make(map[conversationKey]*turnLock)}
+	if config.ConfirmSQLMemory {
+		if config.Memory == nil {
+			return nil, errors.New("SQL memory confirmation requires a memory store")
+		}
+		a.confirmations = new(sqlConfirmations)
+	}
+	return a, nil
 }
 
 func newID() string { return rand.Text() }
@@ -200,6 +208,11 @@ func (a *Agent) Chat(ctx context.Context, user User, id, question string, emit f
 func (a *Agent) chat(ctx context.Context, user User, id, question string, emit func(Component) error, outcome *turnOutcome) (err error) {
 	if user.ID == "" || id == "" || emit == nil {
 		return errors.New("user, conversation ID and component sink are required")
+	}
+	if stores, ok := a.config.Memory.(*TenantMemoryStore); ok {
+		if _, err := stores.ForUser(user); err != nil {
+			return err
+		}
 	}
 	ctx = i18n.WithLocale(ctx, i18n.Resolve(i18n.Requested(ctx), "", a.config.DefaultLocale))
 	answerCtx := i18n.WithLocale(ctx, requestedAnswerLocale(question))
@@ -251,6 +264,7 @@ func (a *Agent) chat(ctx context.Context, user User, id, question string, emit f
 		return err
 	}
 	defer leave()
+	originalQuestion := question
 	starterRequest := strings.TrimSpace(question) == "" || turn.Metadata["starter_ui_request"] == true
 	if starterRequest {
 		question = ""
@@ -259,6 +273,9 @@ func (a *Agent) chat(ctx context.Context, user User, id, question string, emit f
 		if err != nil {
 			return err
 		}
+	}
+	if a.confirmations != nil && question == originalQuestion && strings.HasPrefix(question, "/confirm-sql ") {
+		return a.confirmSQL(ctx, turn, strings.TrimSpace(strings.TrimPrefix(question, "/confirm-sql ")), emit)
 	}
 	_, schemaTrace := a.startSpan(ctx, "agent.tool_schemas.fetch", "agent.tool_schemas.duration", map[string]any{"user_id": user.ID}, nil)
 	specs := a.registry.Schemas(user)
@@ -339,6 +356,14 @@ func (a *Agent) chat(ctx context.Context, user User, id, question string, emit f
 		// A recall request may use retrieval tools, but cannot mutate shared memory.
 		specs = slices.DeleteFunc(slices.Clone(specs), func(s ToolSpec) bool { return isMemoryWriteTool(s.Name) })
 	}
+	// Preview fragments are negotiated separately from the authoritative text
+	// event. Never publish a draft that evidence checks or middleware must review.
+	var onText func(string) error
+	if turn.Metadata["answer_deltas"] == true && a.canPreviewAnswer() {
+		onText = func(fragment string) error {
+			return emit(Component{Type: "answer_delta", Data: map[string]any{"text": fragment}})
+		}
+	}
 	for round := 0; round < a.config.MaxToolIterations; round++ {
 		messageTrace.set("tool_iterations", round)
 		input := append([]Message{{Role: "system", Content: system}}, messages...)
@@ -351,7 +376,7 @@ func (a *Agent) chat(ctx context.Context, user User, id, question string, emit f
 		if evidence.verbatim != "" {
 			reply = evidence.directSave()
 		} else {
-			reply, err = a.reply(ctx, turn, input, specs, focus)
+			reply, err = a.reply(ctx, turn, input, specs, focus, onText)
 		}
 		if err != nil {
 			return err
@@ -493,6 +518,14 @@ func (a *Agent) chat(ctx context.Context, user User, id, question string, emit f
 					return err
 				}
 			}
+			if a.confirmations != nil && call.Function.Name == "run_sql" && a.canConfirmSQL(user) && len(evidence.queries) > 0 {
+				r := evidence.queries[len(evidence.queries)-1]
+				if r.callID == call.ID && r.hasResult && r.statement != "" {
+					if err := emit(a.confirmations.offer(ctx, turn, originalQuestion, r)); err != nil {
+						return err
+					}
+				}
+			}
 		}
 		// An exact, single-statement request already has its final answer. The
 		// receipt uses the effective tool arguments after registry policy and hooks.
@@ -575,6 +608,9 @@ func (a *Agent) executeCall(ctx context.Context, turn Turn, call ToolCall, emit 
 	var result ToolResult
 	args, err := a.prepareTool(ctx, turn, tool, call)
 	var statement string
+	if err == nil && a.confirmations != nil && call.Function.Name == "save_question_tool_args" && sqlMemoryArgs(args) && ctx.Value(sqlApprovalKey{}) == nil {
+		err = errors.New(i18n.T(ctx, "server.memory.confirm_required"))
+	}
 	if err == nil {
 		if isSQL || call.Function.Name == "run_sql" {
 			statement, _ = sqlStatement(args)

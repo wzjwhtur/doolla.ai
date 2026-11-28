@@ -34,8 +34,9 @@ type sqlReceipt struct {
 }
 
 type queryResultArtifact struct {
-	id       string
-	filename string
+	id        string
+	filename  string
+	truncated bool
 }
 
 type queryResultsKey struct{}
@@ -67,7 +68,7 @@ func (e *turnEvidence) recordSQL(call ToolCall, statement string, ran bool, rowC
 	}
 	if output, _ := result.Metadata["output_file"].(string); r.hasResult && count > 0 && file != "" && output == file {
 		id := fmt.Sprintf("result_%d", len(e.queryResults())+1)
-		r.artifact = queryResultArtifact{id: id, filename: file}
+		r.artifact = queryResultArtifact{id: id, filename: file, truncated: result.Metadata["truncated"] == true}
 		result.Content += "\nQuery result ID: " + id
 	}
 	if component := result.Component; r.hasResult && component != nil && component.Type == "dataframe" && component.Data != nil {

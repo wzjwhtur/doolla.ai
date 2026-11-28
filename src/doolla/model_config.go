@@ -123,7 +123,7 @@ func NewModel(config ModelConfig) (Model, error) {
 	default:
 		return nil, fmt.Errorf("unknown model provider %q", provider)
 	}
-	if m.options.Temperature == nil && (m.provider == "azure" || m.provider == "anthropic" || m.provider == "gemini") {
+	if m.options.Temperature == nil && (m.provider == "anthropic" || m.provider == "gemini") {
 		defaultTemperature := 0.7
 		m.options.Temperature = &defaultTemperature
 	}
