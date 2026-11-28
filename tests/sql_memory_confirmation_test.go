@@ -154,3 +154,41 @@ func TestConfirmedMemoryTenantHTTP(t *testing.T) {
 	}
 
 }
+
+func TestTenantMemoryPrincipalBinding(t *testing.T) {
+	east, west := doolla.NewLocalMemory(8), doolla.NewLocalMemory(8)
+	stores := map[string]doolla.MemoryStore{"east": east, "west": west}
+	router, err := doolla.NewTenantMemoryStore(stores)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stores["east"] = west // Caller changes must not reroute an established tenant.
+	metadata := map[string]any{"department": "reports", "tenant_id": "west"}
+	user, err := doolla.TenantUser("east", doolla.User{ID: "lee", Metadata: metadata})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata["tenant_id"] != "west" || metadata["tenant_subject"] != nil || user.Metadata["department"] != "reports" {
+		t.Fatal("binding changed caller metadata or dropped the department")
+	}
+	if got, err := router.ForUser(user); err != nil || got != east {
+		t.Fatalf("expected east store for verified user, got %v, %v", got, err)
+	}
+	for _, tc := range []struct {
+		name            string
+		id              string
+		tenant, subject any
+	}{
+		{"ordinary subject", "lee", "east", "lee"},
+		{"changed tenant", user.ID, "west", "lee"},
+		{"changed subject", user.ID, "east", "other"},
+		{"malformed claim", user.ID, 42, "lee"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := doolla.User{ID: tc.id, Metadata: map[string]any{"tenant_id": tc.tenant, "tenant_subject": tc.subject}}
+			if got, err := router.ForUser(candidate); err == nil || got != nil {
+				t.Fatalf("inconsistent principal resolved to %v, %v", got, err)
+			}
+		})
+	}
+}

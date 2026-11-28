@@ -249,3 +249,48 @@ func TestWorkflowMemoryActionsAndNullChartValues(t *testing.T) {
 		t.Fatal(trace)
 	}
 }
+
+func TestAnswerPreviewsRespectResponseMiddleware(t *testing.T) {
+	const draft = "draft text"
+	const reviewed = "reviewed answer"
+	before := LLMMiddleware{BeforeRequest: func(_ context.Context, r ModelRequest) (ModelRequest, error) {
+		return r, nil
+	}}
+	after := LLMMiddleware{AfterResponse: func(_ context.Context, _ ModelRequest, m Message) (Message, error) {
+		m.Content = reviewed
+		return m, nil
+	}}
+	for _, tc := range []struct {
+		name                    string
+		metadata                map[string]any
+		middlewares             []LLMMiddleware
+		wantPreview, wantAnswer string
+	}{
+		{"opted in with request hook", map[string]any{"answer_deltas": true}, []LLMMiddleware{before}, draft, draft},
+		{"no opt in", nil, []LLMMiddleware{before}, "", draft},
+		{"reviewed response", map[string]any{"answer_deltas": true}, []LLMMiddleware{before, after}, "", reviewed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := &MockModel{Replies: []Message{{Content: draft}}}
+			agent, err := NewConfiguredAgent(model, AgentConfig{StreamResponses: true, LLMMiddlewares: tc.middlewares})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.WithValue(t.Context(), metadataKey{}, tc.metadata)
+			var preview strings.Builder
+			var answers []string
+			err = agent.Chat(ctx, User{ID: "user"}, "chat", "hello", func(c Component) error {
+				switch c.Type {
+				case "answer_delta":
+					preview.WriteString(c.Data["text"].(string))
+				case "text":
+					answers = append(answers, c.Data["content"].(string))
+				}
+				return nil
+			})
+			if err != nil || preview.String() != tc.wantPreview || len(answers) != 1 || answers[0] != tc.wantAnswer {
+				t.Fatalf("preview=%q answers=%q err=%v", preview.String(), answers, err)
+			}
+		})
+	}
+}

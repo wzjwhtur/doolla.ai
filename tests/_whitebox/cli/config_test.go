@@ -260,3 +260,23 @@ func TestEmbeddingCacheHTTPAndLocalStore(t *testing.T) {
 		t.Fatal(calls)
 	}
 }
+
+func TestEmbeddingModeReportedAtStartup(t *testing.T) {
+	for _, tc := range []struct {
+		provider, url, want string
+	}{
+		{"local", "https://embed.example", "lexical"},
+		{"marqo", "", "backend-managed"},
+		{"premium", "https://embed.example", "backend-managed"},
+		{"chroma", "", "native-model"},
+		{"chromadb", "https://embed.example", "external"},
+		{"qdrant", "", "legacy-md5"},
+		{"qdrant", "https://embed.example", "external"},
+	} {
+		t.Run(tc.provider+"/"+tc.want, func(t *testing.T) {
+			if got := embeddingMode(tc.provider, tc.url); got != tc.want {
+				t.Errorf("embeddingMode(%q, %q) = %q; want %q", tc.provider, tc.url, got, tc.want)
+			}
+		})
+	}
+}

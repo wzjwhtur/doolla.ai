@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -226,5 +227,42 @@ func TestSQLToolDelegatedDatabaseRunnerLimits(t *testing.T) {
 	r, err := tool.Run(t.Context(), doolla.User{}, []byte(`{"sql":"WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<1001) SELECT i FROM n"}`))
 	if err != nil || r.Metadata["row_count"] != 1001 || r.Metadata["truncated"] == true {
 		t.Fatalf("delegated rows=%v truncated=%v err=%v", r.Metadata["row_count"], r.Metadata["truncated"], err)
+	}
+}
+
+func TestCustomRunnerPreviewLimits(t *testing.T) {
+	rows := []map[string]any{
+		{"term": "雪", "code": nil}, // Four bytes including separator, plus one for NULL.
+		{"term": "A", "code": "B"},
+	}
+	for _, tc := range []struct {
+		name              string
+		maxRows, maxBytes int
+		alreadyTruncated  bool
+		wantRows          int
+		wantTruncated     bool
+	}{
+		{"exact result", 2, 9, false, 2, false},
+		{"row cap", 1, 9, false, 1, true},
+		{"second row crosses byte cap", 2, 8, false, 1, true},
+		{"first row crosses byte cap", 2, 4, false, 0, true},
+		{"upstream truncated a smaller result", 4, 20, true, 2, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// This runner returns its own materialized rows and never consults SQLTool's limits.
+			runner := &scalarFixture{results: []doolla.SQLResult{{Columns: []string{"term", "code"}, Rows: rows, Truncated: tc.alreadyTruncated}}}
+			tool := doolla.SQLTool{Runner: runner, Limits: doolla.SQLResultLimits{MaxRows: tc.maxRows, MaxBytes: tc.maxBytes}, DisableArtifacts: true}
+			r, err := tool.Run(t.Context(), doolla.User{}, []byte(`{"sql":"SELECT term, code FROM labels"}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := r.Metadata["results"].([]map[string]any)
+			if !reflect.DeepEqual(got, rows[:tc.wantRows]) || r.Metadata["row_count"] != tc.wantRows {
+				t.Fatalf("retained %v with row_count=%v", got, r.Metadata["row_count"])
+			}
+			if (r.Component.Data["truncated"] == true) != tc.wantTruncated || strings.Contains(r.Content, "total is unknown") != tc.wantTruncated {
+				t.Fatalf("unexpected truncation in component or model preview: %+v", r)
+			}
+		})
 	}
 }
