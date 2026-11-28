@@ -126,3 +126,39 @@ jq -r '.chunks[].rich | select(.type == "text") | .data.content' answer.json
 - **替换模型或工具。** 通过 `doolla.ModelConfig` 选择适配器。业务工具实现 `doolla.Tool` 的 `Spec` 和 `Run` 后，通过 `doolla.Registration` 注册到 Agent。已有 HTTP 服务可以挂载 `doolla.NewServer` 返回的 `http.Handler`。需要跨域嵌入时，用 `NewServerWithOptions` 设置 `AllowedOrigins`。[SDK 入口](../../src/doolla/agent.go) · [模型配置](../../src/doolla/model_config.go)
 
 继续阅读 [使用指南](使用指南.md) 和 [HTTP 与网页接入](HTTP与网页接入.md)。
+
+## 企业租户记忆隔离
+
+企业服务可以将经过身份认证的租户和用户交给 `TenantUser`，并将各租户的存储登记到 `NewTenantMemoryStore`。下面的装配函数接受宿主已有的登录验证函数。该函数应验证令牌的签名、签发方和受众，并从已验证的声明读取租户、主体和权限组。聊天消息的 `metadata` 由客户端填写，不能作为租户身份来源。
+
+```go
+func tenantChat(
+    model doolla.Model,
+    sqlTool doolla.SQLTool,
+    stores map[string]doolla.MemoryStore,
+    authenticate func(*http.Request) (tenant, subject string, groups []string, err error),
+) (http.Handler, error) {
+    routed, err := doolla.NewTenantMemoryStore(stores)
+    if err != nil {
+        return nil, err
+    }
+    tools := append(doolla.MemoryTools(routed), doolla.Registration{Tool: sqlTool})
+    agent, err := doolla.NewConfiguredAgent(model, doolla.AgentConfig{
+        Memory: routed, ConfirmSQLMemory: true,
+    }, tools...)
+    if err != nil {
+        return nil, err
+    }
+    return doolla.NewServer(agent, func(_ http.ResponseWriter, req *http.Request) (doolla.User, error) {
+        tenant, subject, groups, err := authenticate(req)
+        if err != nil {
+            return doolla.User{}, err
+        }
+        return doolla.TenantUser(tenant, doolla.User{ID: subject, Groups: groups})
+    }), nil
+}
+```
+
+`stores` 的键是身份系统中的租户 ID。每个值应指向独立的存储，例如两个 Milvus collection、两个 Pinecone namespace，或两个不同的 `NewLocalMemory` 实例。将同一个底层集合登记给两个租户会共享数据。由宿主管理各存储的打开和关闭。已有的单租户实例可继续使用原集合，新租户应显式指定其集合。共享历史集合中的归属需在迁移前单独核实。
+
+路由覆盖 `Save`、`Search`、`Recent`、`Delete` 和 `Clear`。租户未知或未绑定时，服务拒绝访问。工具、自动召回和维护命令使用同一组存储。`TenantUser` 将租户和原始主体共同编码成 `User.ID`，会话、请求重放和结果文件因此能区分不同租户内的同名账号。原始主体保存在 `User.Metadata["tenant_subject"]`；已有自定义 SQLRunner 如按主体做数据权限映射，应同时读取 `tenant_id` 和 `tenant_subject`。离线管理可对已核验的主体调用 `routed.ForUser(user)` 获取其存储。

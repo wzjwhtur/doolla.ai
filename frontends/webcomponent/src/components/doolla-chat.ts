@@ -593,26 +593,23 @@ export class DoollaChat extends LitElement {
     // Note: Don't create apiClient here - attributes haven't been set yet!
     // It will be created lazily in getApiClient() or firstUpdated()
     this.conversationId = this.generateId();
+    this.addEventListener('card-action', (event) => {
+      // An embedded host can display multiple conversations. Keep confirmations
+      // in the widget that supplied the card and its authenticated conversation.
+      if (event.composedPath().find(node => node instanceof DoollaChat) === this) {
+        const action = (event as CustomEvent<{ action: string }>).detail?.action;
+        if (typeof action === 'string') void this.sendMessage(action);
+      }
+    });
   }
 
-  /**
-   * Ensure API client is created/updated with current endpoint values
-   */
-  private ensureApiClient() {
-    // Always recreate to ensure we have the latest endpoint values
-    console.log('[DoollaChat] Creating API client with:', {
-      baseUrl: this.apiBaseUrl,
-      sseEndpoint: this.sseEndpoint,
-      wsEndpoint: this.wsEndpoint,
-      pollEndpoint: this.pollEndpoint
-    });
-
-    this.apiClient = new DoollaApiClient({
-      baseUrl: this.apiBaseUrl,
-      sseEndpoint: this.sseEndpoint,
-      wsEndpoint: this.wsEndpoint,
-      pollEndpoint: this.pollEndpoint
-    });
+  override attributeChangedCallback(name: string, oldValue: string | null, value: string | null) {
+    // Upgrading parsed markup delivers existing attributes in source order.
+    // Bind initial headers to the declared API even if its callback comes next.
+    if (name === 'custom-headers' && !this.apiClient && !this.hasUpdated && this.hasAttribute('api-base')) {
+      this.apiBaseUrl = this.getAttribute('api-base')!;
+    }
+    super.attributeChangedCallback(name, oldValue, value);
   }
 
   connectedCallback() {
@@ -624,9 +621,6 @@ export class DoollaChat extends LitElement {
   }
 
   firstUpdated() {
-    // Create API client now that attributes have been set
-    this.ensureApiClient();
-
     // Initialize component manager with rich components container (fallback)
     const richContainer = this.shadowRoot?.querySelector('.rich-components-container') as HTMLElement;
     if (richContainer) {
@@ -781,7 +775,7 @@ export class DoollaChat extends LitElement {
         conversation_id: this.conversationId,
         request_id: this.generateId(),
         locale,
-        metadata: {}
+        metadata: { answer_deltas: true }
       };
 
       // Stream the response
@@ -933,19 +927,33 @@ export class DoollaChat extends LitElement {
   }
 
   private async handleStreamingResponse(request: ChatRequest, initialReply?: AssistantReply): Promise<TurnOutcome | undefined> {
-    if (!this.apiClient || this.apiClient.baseUrl !== this.apiBaseUrl) {
-      this.ensureApiClient();
-    }
+    const client = this.getApiClient();
 
     const locale = normalizeLocale(request.locale) ?? this.activeLocale;
     let reply = initialReply;
     let outcome: TurnOutcome | undefined;
+    let preview: Text | undefined;
     const process = (chunk: ChatStreamChunk) => {
       const update = this.getChunkUpdate(chunk);
       if (!update) return;
 
       const component = update.component;
       const type = component?.type;
+      if (component?.type === 'answer_delta') {
+        if (typeof component.data?.text === 'string' && component.data.text) {
+          reply ??= this.createAssistantReply();
+          if (reply) {
+            if (!preview) {
+              preview = this.ownerDocument.createTextNode('');
+              reply.content.append(preview);
+            }
+            preview.appendData(component.data.text);
+          }
+        }
+        return;
+      }
+      preview?.remove();
+      preview = undefined;
       if (component?.type === 'turn_outcome') {
         const { status, code } = component.data ?? {};
         if (status === 'succeeded' || status === 'partial' || status === 'failed') {
@@ -976,7 +984,7 @@ export class DoollaChat extends LitElement {
 
     let receivedChunk = false;
     try {
-      for await (const chunk of this.apiClient.streamChat(request)) {
+      for await (const chunk of client.streamChat(request)) {
         receivedChunk = true;
         process(chunk);
       }
@@ -990,13 +998,14 @@ export class DoollaChat extends LitElement {
         } else {
           this.setStatus('working', t(locale, 'web.status.retry_connection'));
         }
-        const response = await this.apiClient.sendPollMessage(request);
+        const response = await client.sendPollMessage(request);
         for (const chunk of response.chunks) process(chunk);
       } catch (pollError) {
         this.setStatus('error', t(locale, 'web.status.connection_failed'));
         throw pollError;
       }
     } finally {
+      preview?.remove();
       // Starter responses can also publish progress from a custom workflow.
       if (!initialReply && reply) {
         reply.tracker.running = false;
@@ -1038,24 +1047,40 @@ export class DoollaChat extends LitElement {
    */
   updateApiBaseUrl(baseUrl: string) {
     this.apiBaseUrl = baseUrl;
-    this.ensureApiClient();
+    this.getApiClient();
   }
 
   /**
    * Get the API client instance for direct access
    */
   getApiClient(): DoollaApiClient {
-    if (!this.apiClient) {
-      this.ensureApiClient();
-    }
+    const previous = this.apiClient;
+    const origin = new URL(this.apiBaseUrl || document.baseURI, document.baseURI).origin;
+    if (previous && previous.origin === origin && previous.baseUrl === this.apiBaseUrl &&
+        previous.sseEndpoint === this.sseEndpoint && previous.wsEndpoint === this.wsEndpoint &&
+        previous.pollEndpoint === this.pollEndpoint) return previous;
+    this.apiClient = new DoollaApiClient({
+      baseUrl: this.apiBaseUrl, sseEndpoint: this.sseEndpoint,
+      wsEndpoint: this.wsEndpoint, pollEndpoint: this.pollEndpoint,
+      customHeaders: previous?.origin === origin ? previous.getCustomHeaders() : undefined,
+    });
     return this.apiClient;
+  }
+
+  @property({ type: Object, attribute: 'custom-headers' })
+  get customHeaders(): Record<string, string> {
+    return this.getApiClient().getCustomHeaders();
+  }
+
+  set customHeaders(headers: Record<string, string> | null) {
+    this.getApiClient().setCustomHeaders(headers ?? {});
   }
 
   /**
    * Set custom headers for authentication or other purposes
    */
   setCustomHeaders(headers: Record<string, string>) {
-    this.apiClient.setCustomHeaders(headers);
+    this.customHeaders = headers;
   }
 
   /**

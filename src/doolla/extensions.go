@@ -107,7 +107,10 @@ type AgentConfig struct {
 	// DirectSQLResult skips a model summary for an explicitly requested single
 	// SELECT once the requested statement has returned a verified scalar result.
 	// It requires VerifyToolAnswers and preserves normal tool execution and hooks.
-	DirectSQLResult  bool
+	DirectSQLResult bool
+	// ConfirmSQLMemory offers a user action for successful run_sql receipts and
+	// disables model-initiated saves of SQL examples.
+	ConfirmSQLMemory bool
 	Memory           MemoryStore
 	TextMemoryRecall MemoryRecall // The zero value uses DefaultTextRecall.
 	Conversations    ConversationStore
@@ -165,7 +168,11 @@ func (a *Agent) systemPrompt(ctx context.Context, t Turn, q string, tools []Tool
 			case "search_saved_correct_tool_uses":
 				prompt += "\nBefore executing SQL or creating a chart, search for similar successful tool uses with the user's question."
 			case "save_question_tool_args":
-				prompt += "\nSave successful question and tool argument combinations for future use."
+				if a.config.ConfirmSQLMemory {
+					prompt += "\nSQL examples are saved by user confirmation. Do not call save_question_tool_args for SQL."
+				} else {
+					prompt += "\nSave successful question and tool argument combinations for future use."
+				}
 			case "save_text_memory":
 				prompt += "\nSave reusable schema or business knowledge as text memory. Exclude temporary query results."
 			}
@@ -219,7 +226,7 @@ func withRecovery[T any](ctx context.Context, a *Agent, e Event, run func() (T, 
 		}
 	}
 }
-func (a *Agent) reply(ctx context.Context, t Turn, messages []Message, tools []ToolSpec, focus string) (Message, error) {
+func (a *Agent) reply(ctx context.Context, t Turn, messages []Message, tools []ToolSpec, focus string, onText func(string) error) (Message, error) {
 	for _, f := range a.config.Filters {
 		var err error
 		child, trace := a.startSpan(ctx, "agent.conversation.filter", "agent.filter.duration", map[string]any{"message_count_before": len(messages)}, nil)
@@ -244,10 +251,10 @@ func (a *Agent) reply(ctx context.Context, t Turn, messages []Message, tools []T
 		}
 		messages = append(prefix, enhanced...)
 	}
-	send := a.sendModel
+	send := func(ctx context.Context, r ModelRequest) (Message, error) { return a.sendModel(ctx, r, onText) }
 	if len(a.config.Middleware) > 0 {
 		send = func(ctx context.Context, r ModelRequest) (Message, error) {
-			return a.sendModel(ctx, r.splitSystem())
+			return a.sendModel(ctx, r.splitSystem(), onText)
 		}
 		for _, mw := range slices.Backward(a.config.Middleware) {
 			next := send

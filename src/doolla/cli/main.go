@@ -60,7 +60,10 @@ func run(ctx context.Context, args []string, output io.Writer, open MemoryOpener
 	backend := flags.String("database", env("DOOLLA_DATABASE", "sqlite"), i18n.Format(i18n.English, "cli.flag.database"))
 	dsn := flags.String("dsn", os.Getenv("DOOLLA_DSN"), i18n.Format(i18n.English, "cli.flag.dsn"))
 	duckInit := flags.String("duckdb-init-sql", os.Getenv("DOOLLA_DUCKDB_INIT_SQL"), i18n.Format(i18n.English, "cli.flag.duckdb-init-sql"))
+	maxRows := flags.Int("sql-max-rows", doolla.DefaultSQLMaxRows, i18n.Format(i18n.English, "cli.flag.sql-max-rows"))
+	maxBytes := flags.Int("sql-max-bytes", doolla.DefaultSQLMaxBytes, i18n.Format(i18n.English, "cli.flag.sql-max-bytes"))
 	writable := flags.Bool("sqlite-writable", false, i18n.Format(i18n.English, "cli.flag.sqlite-writable"))
+	verifyAnswers := flags.Bool("verify-tool-answers", true, i18n.Format(i18n.English, "cli.flag.verify-tool-answers"))
 	stream := flags.Bool("stream-model", true, i18n.Format(i18n.English, "cli.flag.stream-model"))
 	maxOutput := flags.Int("max-output-tokens", 0, i18n.Format(i18n.English, "cli.flag.max-output-tokens"))
 	temperature := flags.String("temperature", os.Getenv("DOOLLA_TEMPERATURE"), i18n.Format(i18n.English, "cli.flag.temperature"))
@@ -76,6 +79,8 @@ func run(ctx context.Context, args []string, output io.Writer, open MemoryOpener
 	flags.Float64Var(&textRecall.Threshold, "memory-text-threshold", textRecall.Threshold, i18n.Format(i18n.English, "cli.flag.memory-text-threshold"))
 	flags.IntVar(&toolRecall.Limit, "memory-tool-limit", toolRecall.Limit, i18n.Format(i18n.English, "cli.flag.memory-tool-limit"))
 	flags.Float64Var(&toolRecall.Threshold, "memory-tool-threshold", toolRecall.Threshold, i18n.Format(i18n.English, "cli.flag.memory-tool-threshold"))
+	confirmSQL := flags.Bool("confirm-sql-memory", false, i18n.Format(i18n.English, "cli.flag.confirm-sql-memory"))
+	flags.IntVar(&mem.config.EmbedCacheSize, "embed-cache-size", 0, i18n.Format(i18n.English, "cli.flag.embed-cache-size"))
 	var embed embeddingOptions
 	flags.StringVar(&embed.url, "embed-url", os.Getenv("DOOLLA_EMBED_URL"), i18n.Format(i18n.English, "cli.flag.embed-url"))
 	flags.StringVar(&embed.model, "embed-model", os.Getenv("DOOLLA_EMBED_MODEL"), i18n.Format(i18n.English, "cli.flag.embed-model"))
@@ -130,8 +135,11 @@ func run(ctx context.Context, args []string, output io.Writer, open MemoryOpener
 	if flags.NArg() != 0 {
 		return errors.New(i18n.T(ctx, "cli.error.unexpected_arg", strconv.Quote(flags.Arg(0))))
 	}
-	if err := applyRecallEnv(flags); err != nil {
+	if err := applyTypedEnv(flags); err != nil {
 		return err
+	}
+	if *maxRows <= 0 || *maxBytes <= 0 {
+		return errors.New(i18n.T(ctx, "cli.error.sql_limits"))
 	}
 	if err := textRecall.Validate(); err != nil {
 		return fmt.Errorf("%s: %w", i18n.T(ctx, "cli.error.text_memory"), err)
@@ -155,6 +163,9 @@ func run(ctx context.Context, args []string, output io.Writer, open MemoryOpener
 	if err != nil {
 		return err
 	}
+	if mem.config.EmbedCacheSize < 0 {
+		return errors.New(i18n.T(ctx, "cli.error.embed_cache_size"))
+	}
 	store, err := mem.open(ctx, flags, *dir, embed, open)
 	if err != nil {
 		return err
@@ -162,7 +173,7 @@ func run(ctx context.Context, args []string, output io.Writer, open MemoryOpener
 	if closer, ok := store.(io.Closer); ok {
 		defer closer.Close()
 	}
-	cfg := doolla.AgentConfig{DefaultLocale: locale, VerifyToolAnswers: true, DirectTextRecall: true, DirectSQLResult: true, DisableAutoSave: !*autoSave, HideProgress: !*showProgress, Memory: store, TextMemoryRecall: textRecall, MaxToolIterations: *toolRounds, StreamResponses: *stream, ReplaceDefaultUIFeatures: *replaceFeatures,
+	cfg := doolla.AgentConfig{DefaultLocale: locale, VerifyToolAnswers: *verifyAnswers, DirectTextRecall: true, DirectSQLResult: true, DisableAutoSave: !*autoSave, HideProgress: !*showProgress, Memory: store, ConfirmSQLMemory: *confirmSQL, TextMemoryRecall: textRecall, MaxToolIterations: *toolRounds, StreamResponses: *stream, ReplaceDefaultUIFeatures: *replaceFeatures,
 		SystemPrompt: "You are a data analyst. Use the available tools to answer questions using actual results. Inspect the database schema when necessary. Use visualize_data for charts. With one query result in the current turn, omit its source argument. With multiple results, pass the appropriate result_id returned by run_sql. If asked to select an existing result_id, reuse it without rerunning SQL. Use filename only for an explicitly named existing CSV."}
 	if *featureConfig != "" {
 		data, err := os.ReadFile(*featureConfig)
@@ -225,7 +236,7 @@ func run(ctx context.Context, args []string, output io.Writer, open MemoryOpener
 		if err != nil {
 			return fmt.Errorf("%s: %w", i18n.T(ctx, "cli.error.database"), err)
 		}
-		tools = append(tools, doolla.Registration{Tool: doolla.SQLTool{DB: db, Artifacts: &artifacts}}, doolla.Registration{Tool: doolla.VisualizationTool{Artifacts: artifacts}})
+		tools = append(tools, doolla.Registration{Tool: doolla.SQLTool{DB: db, Artifacts: &artifacts, Limits: doolla.SQLResultLimits{MaxRows: *maxRows, MaxBytes: *maxBytes}}}, doolla.Registration{Tool: doolla.VisualizationTool{Artifacts: artifacts}})
 		switch strings.ToLower(strings.TrimSpace(*backend)) {
 		case "mssql", "sqlserver":
 			tools = append(tools, doolla.Registration{Tool: database.MSSQLSchemaTool{DB: db}})
@@ -277,6 +288,7 @@ In the answer, name the inspected tables or state their scope. Distinguish decla
 		return err
 	}
 	fmt.Fprintln(output, i18n.T(ctx, "cli.listening", listener.Addr()))
+	fmt.Fprintln(output, i18n.T(ctx, "cli.memory_embedding", mem.config.Provider, embeddingMode(mem.config.Provider, embed.url), embed.model))
 	stopped := make(chan error, 1)
 	go func() { stopped <- srv.Serve(listener) }()
 	select {
@@ -412,4 +424,21 @@ func embeddingClient(base, model, key string) func(context.Context, string) ([]f
 		}
 		return data.Data[0].Embedding, nil
 	}
+}
+
+// Announce the effective indexing strategy without exposing the endpoint or key.
+func embeddingMode(provider, embedURL string) string {
+	switch provider {
+	case "local":
+		return "lexical"
+	case "marqo", "premium":
+		return "backend-managed"
+	}
+	if embedURL != "" {
+		return "external"
+	}
+	if provider == "chroma" || provider == "chromadb" {
+		return "native-model"
+	}
+	return "legacy-md5"
 }

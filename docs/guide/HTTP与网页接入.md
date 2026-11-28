@@ -89,6 +89,25 @@ socket.onmessage = ({ data }) => {
 
 宿主页面可以监听组件的 `turn-completed` 事件，从 `event.detail` 读取 `status`、`code`、`request_id` 和 `conversation_id`。`sendMessage()` 在服务明确返回部分完成或失败时返回 `false`，页面仍会保留已收到的结果和错误提示。旧服务仅发送传输结束标记时，组件沿用原有返回值。
 
+### 在组件中绑定企业登录身份
+
+在宿主应用完成登录后，将短期令牌绑定到目标 API。下面的 `accessToken` 由宿主登录流程提供，`/assets/doolla-components.js` 已加载。
+
+```js
+await customElements.whenDefined('doolla-chat')
+const chat = document.createElement('doolla-chat')
+chat.apiBaseUrl = 'https://analytics.example.com'
+chat.customHeaders = { Authorization: 'Bearer ' + accessToken }
+document.querySelector('#chat-panel').append(chat)
+
+// 登录令牌刷新后
+chat.setCustomHeaders({ Authorization: 'Bearer ' + renewedAccessToken })
+```
+
+SSE 和轮询都会使用当前请求头。同源路径切换会保留这些头；切换来源后，在新身份验证完成后重新赋值。携带自定义头时请使用最终请求地址，HTTP 重定向会导致请求失败。登出时可设置 `chat.customHeaders = {}`。浏览器 WebSocket 握手通过会话 Cookie 接入，服务端在处理每条消息时调用 `UserResolver`。使用仅支持 Bearer 的网关时选择 SSE 或轮询。
+
+聊天组件会为交互请求设置 `metadata.answer_deltas: true`。服务端允许预览时，组件先以纯文本显示收到的 `answer_delta` 片段；收到最终答案后，使用正式 `text` 组件显示 Markdown。中断时会移除临时文本。独立 HTML 图表导出使用与当前组件一致的 Plotly 版本，打开导出的页面需要能访问 `cdn.plot.ly`。
+
 ## 选择界面和回复语言
 
 独立网页右上角可以切换「简体中文 / English」，刷新后保留选择。嵌入网页可以设置 `<doolla-chat locale="zh-CN">`，并通过 `locale-changed` 事件读取用户选择。服务支持 `en` 和 `zh-CN`，以及与它们匹配的语言标签。

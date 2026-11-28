@@ -402,3 +402,20 @@ func TestExplainUpdateReturnsQueryPlan(t *testing.T) {
 		t.Fatal(got, err)
 	}
 }
+
+func TestExplicitSQLQuotedSeparator(t *testing.T) {
+	for _, tc := range []struct {
+		sql    string
+		accept bool
+	}{
+		{"SELECT 'semi;colon' AS name", true},
+		{"SELECT 'escaped'';quote' AS name", true},
+		{"SELECT 'a;b'; SELECT 2", false},
+		{"SELECT 'a;b'; DELETE FROM sales", false},
+	} {
+		got := explicitSQLStatement("Run SQL: " + tc.sql)
+		if (got != "") != tc.accept || (tc.accept && got != tc.sql) {
+			t.Errorf("%s => %q", tc.sql, got)
+		}
+	}
+}

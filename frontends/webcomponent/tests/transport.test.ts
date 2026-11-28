@@ -1,7 +1,9 @@
 import { DoollaApiClient } from '../src/services/api-client';
+import { version as plotlyVersion } from 'plotly.js-dist-min/package.json';
+import type { RichCard } from '../src/components/rich-card';
 import type { DoollaProgressTracker } from '../src/components/doolla-progress-tracker';
 import { DoollaChat } from '../src/components/doolla-chat';
-import { ComponentManager, DataFrameComponentRenderer, NotificationComponentRenderer } from '../src/components/rich-component-system';
+import { ArtifactComponentRenderer, ComponentManager, DataFrameComponentRenderer, NotificationComponentRenderer } from '../src/components/rich-component-system';
 
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
@@ -45,6 +47,142 @@ async function testSse() {
     chat.remove();
     check(ok === !partial && polls === (partial ? 0 : 1), 'SSE premature EOF / Poll replay');
   }
+}
+
+async function testHeaderLifecycle() {
+  const requests: { url: string; headers: Headers; redirect?: string }[] = [];
+  window.fetch = async (url, init) => {
+    requests.push({ url: String(url), headers: new Headers(init?.headers), redirect: init?.redirect });
+    return String(url).includes('poll') ? Response.json({ chunks: [] }) : new Response('data: [DONE]\n\n');
+  };
+  const chat = new DoollaChat();
+  chat.apiBaseUrl = 'https://first.example';
+  chat.setCustomHeaders({ Authorization: 'Bearer original' });
+  document.body.append(chat);
+  try {
+    await chat.updateComplete;
+    check(requests[0].headers.get('authorization') === 'Bearer original', 'authenticated starter before firstUpdated');
+    chat.updateApiBaseUrl('https://first.example/enterprise');
+    await chat.getApiClient().sendPollMessage(request);
+    check(requests[1].headers.get('authorization') === 'Bearer original', 'same-origin recreation preserves credentials');
+    chat.customHeaders = { Authorization: 'Bearer refreshed', 'X-Account': 'one' };
+    await chat.sendMessage('refresh');
+    check(requests[2].headers.get('authorization') === 'Bearer refreshed' && requests[2].redirect === 'error', 'token refresh and guarded redirects');
+    chat.pollEndpoint = 'https://other.example/poll';
+    await chat.getApiClient().sendPollMessage(request);
+    check(!requests[3].headers.has('authorization') && !requests[3].headers.has('x-account'), 'absolute endpoint must not receive credentials');
+    chat.apiBaseUrl = 'https://other.example';
+    await chat.sendMessage('switch');
+    check(!requests[4].headers.has('authorization') && !requests[4].headers.has('x-account'), 'new API origin requires a fresh header binding');
+    chat.setAttribute('custom-headers', '{"X-Account":"two"}');
+    await chat.getApiClient().sendPollMessage(request);
+    check(requests[5].headers.get('x-account') === 'two', 'declarative header refresh');
+    chat.removeAttribute('custom-headers');
+    await chat.getApiClient().sendPollMessage(request);
+    check(!requests[6].headers.has('x-account'), 'removing headers clears credentials');
+
+    for (const attrs of [
+      `custom-headers='{"X-Account":"markup"}' api-base="https://first.example"`,
+      `api-base="https://first.example" custom-headers='{"X-Account":"markup"}'`,
+    ]) {
+      const template = document.createElement('template');
+      template.innerHTML = `<doolla-chat ${attrs}></doolla-chat>`;
+      const fromMarkup = template.content.firstElementChild as DoollaChat;
+      document.body.append(fromMarkup);
+      try {
+        await fromMarkup.updateComplete;
+        check(requests[requests.length - 1].headers.get('x-account') === 'markup', 'markup configuration is independent of attribute order');
+      } finally { fromMarkup.remove(); }
+    }
+
+    const base = document.createElement('base');
+    base.href = 'https://first.example/';
+    document.head.append(base);
+    try {
+      chat.apiBaseUrl = '/analytics';
+      chat.pollEndpoint = '/poll';
+      chat.setCustomHeaders({ Authorization: 'Bearer scoped' });
+      const bound = chat.getApiClient();
+      base.href = 'https://other.example/';
+      await bound.sendPollMessage(request);
+      check(!requests[requests.length - 1].headers.has('authorization'), 'old client refuses credentials after document base moves');
+      await chat.getApiClient().sendPollMessage(request);
+      check(!requests[requests.length - 1].headers.has('authorization'), 'new client discards previous origin credentials');
+    } finally { base.remove(); }
+  } finally {
+    chat.remove();
+  }
+}
+
+async function testVisibleAnswerDeltas() {
+  const chat = new DoollaChat();
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  window.fetch = async (_url, init) => {
+    const payload = JSON.parse(String(init?.body));
+    if (payload.metadata?.starter_ui_request) return new Response('data: [DONE]\n\n');
+    check(payload.metadata?.answer_deltas === true, 'opt in to previews');
+    return new Response(new ReadableStream({ start(c) { controller = c; } }));
+  };
+  const chunks = (type: string, data: Record<string, any>) => {
+    const seen = new Promise<void>(resolve => chat.addEventListener('chunk-received', () => resolve(), { once: true }));
+    controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify({ ...frame(type), rich: { type, id: type, data } }) + '\n\n'));
+    return seen;
+  };
+  document.body.append(chat);
+  try {
+    await chat.updateComplete;
+    const done = chat.sendMessage('stream');
+    await chunks('answer_delta', { text: '<i>provisional</i>' });
+    await chunks('answer_delta', { text: ' again' });
+    check(chat.shadowRoot!.textContent?.includes('<i>provisional</i> again') && !chat.shadowRoot!.querySelector('i'), 'plain preview arrives before stream completion');
+    await chunks('sql_statement', { content: 'SELECT 1', chat_section: 'activity' });
+    check(!chat.shadowRoot!.textContent?.includes('provisional'), 'tool call clears preview');
+    await chunks('answer_delta', { text: 'finalizing' });
+    await chunks('text', { content: '**complete**', markdown: true });
+    controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+    controller.close();
+    check(await done && chat.shadowRoot!.querySelector('strong')?.textContent === 'complete' &&
+      !chat.shadowRoot!.textContent?.includes('finalizing'), 'one final Markdown answer replaces preview');
+    const failed = chat.sendMessage('interrupt');
+    await chunks('answer_delta', { text: 'unfinished preview' });
+    controller.close();
+    check(!(await failed) && !chat.shadowRoot!.textContent?.includes('unfinished preview'), 'failed stream removes provisional text');
+  } finally { chat.remove(); }
+}
+
+async function testScopedConfirmationAndExport() {
+  const first = new DoollaChat();
+  const second = new DoollaChat();
+  window.fetch = async () => new Response('data: [DONE]\n\n');
+  document.body.append(first, second);
+  try {
+    await Promise.all([first.updateComplete, second.updateComplete]);
+    const sent: string[] = [];
+    first.sendMessage = async () => { sent.push('wrong widget'); return true; };
+    second.sendMessage = async command => { sent.push(command!); return true; };
+    const card = document.createElement('rich-card') as RichCard;
+    card.content = 'SELECT 1';
+    card.actions = [{ action: '/confirm-sql test-id', label: 'Confirm' }];
+    second.shadowRoot!.append(card);
+    await card.updateComplete;
+    card.shadowRoot!.querySelector<HTMLButtonElement>('button.card-action')!.click();
+    check(sent.join('') === '/confirm-sql test-id', 'confirmation stays with its chat');
+    const renderer = new ArtifactComponentRenderer();
+    const root = renderer.render({ id: 'chart', lifecycle: 'create', type: 'artifact', children: [],
+      timestamp: '', visible: true, interactive: true,
+      data: { artifact_type: 'html', dependencies: ['plotly'], external_renderable: true,
+        content: '<div id="chart"></div>', title: 'Export' } });
+    let page = '';
+    root.addEventListener('artifact-opened', event => {
+      const detail = (event as CustomEvent).detail;
+      page = detail.getStandaloneHTML();
+      detail.preventDefault();
+    });
+    root.querySelector<HTMLButtonElement>('.external-btn')!.click();
+    const html = new DOMParser().parseFromString(page, 'text/html');
+    check(html.querySelector('script')?.src === 'https://cdn.plot.ly/plotly-' + plotlyVersion + '.min.js' &&
+      !!html.querySelector('#chart'), 'standalone export uses the installed Plotly version');
+  } finally { first.remove(); second.remove(); }
 }
 
 async function testTurnOutcome() {
@@ -396,6 +534,7 @@ async function testLocaleSwitchPreservesConversation() {
 
 (async () => {
   try {
+    await testHeaderLifecycle(); await testVisibleAnswerDeltas(); await testScopedConfirmationAndExport();
     await testSse(); await testTurnOutcome(); await testWebSocket(); testDataframe(); testToolErrorNotification(); await testTaskTracker();
     await testFinalAnswerMarkdown(); await testComponentLifecycle(); await testAssistantReplies(); await testLocaleSwitchPreservesConversation();
     document.body.dataset.testResult = 'passed';

@@ -11,10 +11,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func applyRecallEnv(flags *flag.FlagSet) error {
+func applyTypedEnv(flags *flag.FlagSet) error {
 	supplied := make(map[string]bool)
 	flags.Visit(func(f *flag.Flag) { supplied[f.Name] = true })
-	for _, name := range []string{"memory-text-limit", "memory-text-threshold", "memory-tool-limit", "memory-tool-threshold"} {
+	for _, name := range []string{"embed-cache-size", "confirm-sql-memory", "sql-max-rows", "sql-max-bytes", "memory-text-limit", "memory-text-threshold", "memory-tool-limit", "memory-tool-threshold"} {
 		if supplied[name] {
 			continue
 		}

@@ -20,8 +20,10 @@ type scalarLine struct {
 }
 
 type scalarEvidence struct {
-	lines   []scalarLine
-	tabular bool
+	lines       []scalarLine
+	tabular     bool
+	limited     bool
+	previewRows int
 }
 
 // A final scalar remains authoritative after a preliminary sample query.
@@ -30,7 +32,15 @@ type scalarEvidence struct {
 func (e *scalarEvidence) record(result ToolResult) {
 	cols, _ := result.Metadata["columns"].([]string)
 	rows, ok := result.Metadata["results"].([]map[string]any)
+	if result.Metadata["truncated"] == true {
+		e.limited = true
+		e.previewRows = len(rows)
+		e.tabular = true
+		e.lines = nil
+		return
+	}
 	if !ok || len(cols) != 1 || len(rows) > 1 {
+		e.limited = false
 		e.tabular = true
 		e.lines = nil
 		return
@@ -51,6 +61,7 @@ func (e *scalarEvidence) record(result ToolResult) {
 		value = fmt.Sprint(v)
 	}
 	if !present || (raw != nil && !sqlNumber.MatchString(value)) {
+		e.limited = false
 		e.tabular = true
 		e.lines = nil
 		return
@@ -70,6 +81,10 @@ func (e scalarEvidence) answer(ctx context.Context) string {
 		} else {
 			lines = append(lines, i18n.T(ctx, "server.query.scalar_value", alias, line.value))
 		}
+	}
+	if e.limited {
+		lines = append(lines, i18n.T(ctx, "server.query.limited", e.previewRows))
+		return strings.Join(lines, "\n\n")
 	}
 	summary := strings.Join(lines, "\n\n")
 	if e.tabular && summary != "" {

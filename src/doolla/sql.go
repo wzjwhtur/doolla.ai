@@ -22,6 +22,7 @@ type SQLTool struct {
 	DB                *sql.DB
 	Artifacts         ResultFiles
 	Runner            SQLRunner
+	Limits            SQLResultLimits
 	Name, Description string
 }
 
@@ -65,14 +66,23 @@ func (s SQLTool) Run(ctx context.Context, u User, raw json.RawMessage) (ToolResu
 	if err != nil {
 		return ToolResult{}, err
 	}
-	runner := s.Runner
-	if runner == nil {
+	limits, err := s.Limits.effective()
+	if err != nil {
+		return ToolResult{}, err
+	}
+	var result SQLResult
+	if s.Runner == nil {
 		if s.DB == nil {
 			return ToolResult{}, errors.New("SQL runner is required")
 		}
-		runner = DatabaseRunner{s.DB}
+		result, err = (DatabaseRunner{s.DB}).runSQL(ctx, query, limits)
+	} else {
+		// A custom runner owns its database cursor. Bound its published result too.
+		result, err = s.Runner.RunSQL(context.WithValue(ctx, sqlResultLimitsKey{}, limits), u, query)
+		if err == nil {
+			result = limits.bound(result)
+		}
 	}
-	result, err := runner.RunSQL(ctx, u, query)
 	if err != nil {
 		return ToolResult{}, err
 	}
@@ -90,6 +100,9 @@ func (s SQLTool) Run(ctx context.Context, u User, raw json.RawMessage) (ToolResu
 	}
 	cols, records := result.Columns, result.Rows
 	metadata["results"], metadata["columns"], metadata["row_count"] = records, cols, len(records)
+	if result.Truncated {
+		metadata["truncated"] = true
+	}
 	var csvText strings.Builder
 	w := csv.NewWriter(&csvText)
 	if err := w.Write(cols); err != nil {
@@ -111,26 +124,40 @@ func (s SQLTool) Run(ctx context.Context, u User, raw json.RawMessage) (ToolResu
 		return ToolResult{}, err
 	}
 	text := csvText.String()
-	preview := []rune(text)
-	content := string(preview[:min(len(preview), 1000)])
-	if len(preview) > 1000 {
-		content += i18n.T(ctx, "server.query.truncated")
+	// Stop at the preview boundary without allocating a rune for every byte
+	// in the retained CSV.
+	content := text
+	n := 0
+	for pos := range text {
+		if n == 1000 {
+			content = text[:pos] + i18n.T(ctx, "server.query.truncated")
+			break
+		}
+		n++
 	}
 	description := i18n.T(ctx, "server.query.description", len(records), len(cols))
 	var filename string
-	if len(records) == 0 {
+	if len(records) == 0 && !result.Truncated {
 		description = i18n.T(ctx, "server.query.no_rows")
 		content = i18n.T(ctx, "server.query.empty")
-	} else if !s.DisableArtifacts {
+	} else if len(records) > 0 && !s.DisableArtifacts {
 		files := s.Artifacts
 		if files == nil {
 			files = Artifacts{Directory: "."}
 		}
-		filename = "query_results_" + newID() + ".csv"
+		prefix := "query_results_"
+		if result.Truncated {
+			prefix += "preview_"
+		}
+		filename = prefix + newID() + ".csv"
 		if err := files.Write(u, filename, []byte(text)); err != nil {
 			return ToolResult{}, err
 		}
 		metadata["output_file"] = filename
+	}
+	if result.Truncated {
+		description = i18n.T(ctx, "server.query.limited", len(records))
+		content += "\n" + description
 	}
 	simpleContent := content
 	if filename != "" {
@@ -142,6 +169,9 @@ func (s SQLTool) Run(ctx context.Context, u User, raw json.RawMessage) (ToolResu
 		"title": i18n.T(ctx, "server.query.results_title"), "description": description, "data": browserRows(records), "columns": cols,
 		"row_count": len(records), "column_count": len(cols), "column_types": map[string]string{}, "chat_section": "activity",
 	}, Simple: plainToolText(simpleContent)}
+	if result.Truncated {
+		component.Data["truncated"] = true
+	}
 	return ToolResult{Content: content, Component: &component, Metadata: metadata}, nil
 }
 
@@ -200,13 +230,118 @@ type SQLResult struct {
 	Columns  []string
 	Rows     []map[string]any
 	Affected *int64
+	// Truncated means Rows contains only a prefix. Its length is not a total.
+	Truncated bool
 }
+
+// SQLResultLimits bounds complete rows retained for the tool result. MaxBytes
+// counts UTF-8 cell content plus one separator byte per cell, excluding column
+// names, serialization overhead and allocations internal to a database driver.
+// Zero selects the defaults. Set positive values to override them.
+type SQLResultLimits struct{ MaxRows, MaxBytes int }
+
+const DefaultSQLMaxRows = 1000
+const DefaultSQLMaxBytes = 4 << 20
+
+type sqlResultLimitsKey struct{}
+
+// SQLResultLimitsFromContext gives custom SQL runners the effective scan
+// bounds from SQLTool. Forward ctx when delegating to DatabaseRunner.
+func SQLResultLimitsFromContext(ctx context.Context) SQLResultLimits {
+	if l, ok := ctx.Value(sqlResultLimitsKey{}).(SQLResultLimits); ok {
+		return l
+	}
+	return SQLResultLimits{MaxRows: DefaultSQLMaxRows, MaxBytes: DefaultSQLMaxBytes}
+}
+
+func (l SQLResultLimits) effective() (SQLResultLimits, error) {
+	if l.MaxRows < 0 || l.MaxBytes < 0 {
+		return l, errors.New("SQL result limits must be non-negative")
+	}
+	if l.MaxRows == 0 {
+		l.MaxRows = DefaultSQLMaxRows
+	}
+	if l.MaxBytes == 0 {
+		l.MaxBytes = DefaultSQLMaxBytes
+	}
+	return l, nil
+}
+
+func (l SQLResultLimits) bound(r SQLResult) SQLResult {
+	remaining := l.MaxBytes
+	for i, row := range r.Rows {
+		if i == l.MaxRows {
+			r.Rows = slices.Clone(r.Rows[:i])
+			r.Truncated = true
+			break
+		}
+		for _, col := range r.Columns {
+			size := sqlCellSize(row[col])
+			if size > remaining {
+				r.Rows = slices.Clone(r.Rows[:i])
+				r.Truncated = true
+				return r
+			}
+			remaining -= size
+		}
+	}
+	return r
+}
+
+func sqlCellSize(v any) int {
+	switch v := v.(type) {
+	case nil:
+		return 1
+	case string:
+		return len(v) + 1
+	default:
+		return len(fmt.Sprint(v)) + 1
+	}
+}
+
+// Scan sees the driver's borrowed []byte before database/sql would clone it
+// into an *any. Do not retain a wide value, even transiently, once over budget.
+type boundedSQLCell struct {
+	remaining *int
+	value     any
+}
+
+func (c *boundedSQLCell) Scan(v any) error {
+	c.value = nil
+	if *c.remaining < 0 {
+		return nil
+	}
+	switch raw := v.(type) {
+	case []byte:
+		if len(raw) >= *c.remaining {
+			*c.remaining = -1
+			return nil
+		}
+		v = string(raw)
+	case time.Time:
+		v = raw.Format(time.RFC3339Nano)
+	case float64:
+		if math.IsInf(raw, 0) || math.IsNaN(raw) {
+			v = fmt.Sprint(raw)
+		}
+	}
+	*c.remaining -= sqlCellSize(v)
+	if *c.remaining >= 0 {
+		c.value = v
+	}
+	return nil
+}
+
 type SQLRunner interface {
 	RunSQL(context.Context, User, string) (SQLResult, error)
 }
 type DatabaseRunner struct{ DB *sql.DB }
 
 func (r DatabaseRunner) RunSQL(ctx context.Context, u User, query string) (SQLResult, error) {
+	return r.runSQL(ctx, query, SQLResultLimitsFromContext(ctx))
+}
+
+func (r DatabaseRunner) runSQL(ctx context.Context, query string, limits SQLResultLimits) (SQLResult, error) {
 	if commandWithoutRows(query) {
 		res, err := r.DB.ExecContext(ctx, query)
 		if err != nil {
@@ -229,28 +364,29 @@ func (r DatabaseRunner) RunSQL(ctx context.Context, u User, query string) (SQLRe
 	}
 	names = uniqueColumns(names)
 	result := SQLResult{Columns: names, Rows: []map[string]any{}}
-	values := make([]any, len(names))
+	remaining := limits.MaxBytes
+	values := make([]boundedSQLCell, len(names))
 	targets := make([]any, len(names))
 	for i := range values {
+		values[i].remaining = &remaining
 		targets[i] = &values[i]
 	}
 	for rows.Next() {
+		// Probe one more row so an exact-limit result remains complete.
+		if len(result.Rows) == limits.MaxRows {
+			result.Truncated = true
+			break
+		}
 		if err := rows.Scan(targets...); err != nil {
 			return SQLResult{}, err
 		}
+		if remaining < 0 {
+			result.Truncated = true
+			break
+		}
 		record := make(map[string]any, len(names))
-		for i, value := range values {
-			switch v := value.(type) {
-			case []byte:
-				value = string(v)
-			case time.Time:
-				value = v.Format(time.RFC3339Nano)
-			case float64:
-				if math.IsInf(v, 0) || math.IsNaN(v) {
-					value = fmt.Sprint(v)
-				}
-			}
-			record[names[i]] = value
+		for i, cell := range values {
+			record[names[i]] = cell.value
 		}
 		result.Rows = append(result.Rows, record)
 	}

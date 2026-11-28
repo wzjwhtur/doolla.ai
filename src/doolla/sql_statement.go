@@ -19,7 +19,7 @@ func explicitSQLStatement(question string) string {
 		}
 		statement := trimSQLTerminator(match[1])
 		words := topLevelWords(statement)
-		if len(words) == 0 || words[0] != "SELECT" || strings.Contains(statement, ";") ||
+		if len(words) == 0 || words[0] != "SELECT" || slices.Contains(words, ";") ||
 			slices.ContainsFunc(words, func(word string) bool {
 				return strings.Contains(" INTO INSERT UPDATE DELETE MERGE REPLACE ALTER CREATE DROP EXEC EXECUTE TRUNCATE ", " "+word+" ")
 			}) {
@@ -97,6 +97,8 @@ func topLevelWords(s string) []string {
 					break
 				}
 			}
+		case ch == ';':
+			words = append(words, ";")
 		case ch == '(':
 			depth++
 		case ch == ')':

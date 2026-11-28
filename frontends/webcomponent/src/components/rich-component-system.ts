@@ -7,6 +7,7 @@ import type { DoollaProgressTracker } from './doolla-progress-tracker';
  * any rich component sent from the chat service.
  */
 
+import { version as plotlyVersion } from 'plotly.js-dist-min/package.json';
 import { richComponentStyleText } from '../styles/rich-component-styles.js';
 import { renderMarkdown } from './markdown.js';
 import { localizeDOM, setWidgetLocales } from '../i18n/index.js';
@@ -514,6 +515,7 @@ export class DataFrameComponentRenderer extends BaseComponentRenderer {
       title,
       description,
       row_count = 0,
+      truncated = false,
       column_count = 0,
       max_rows_displayed = 100,
       searchable = true,
@@ -537,7 +539,7 @@ export class DataFrameComponentRenderer extends BaseComponentRenderer {
           ${title ? `<h3 class="dataframe-title">${this.escapeHtml(title)}</h3>` : ''}
           ${description ? `<p class="dataframe-description">${this.escapeHtml(description)}</p>` : ''}
           <div class="dataframe-meta">
-            <span class="row-count" data-i18n="web.table.row-count" data-i18n-args='${JSON.stringify([Number(row_count)])}'>${this.escapeHtml(row_count)} rows</span>
+            <span class="row-count" data-i18n="${truncated ? 'web.table.preview-count' : 'web.table.row-count'}" data-i18n-args='${JSON.stringify([Number(row_count)])}'>${this.escapeHtml(row_count)} rows</span>
             <span class="column-count" data-i18n="web.table.column-count" data-i18n-args='${JSON.stringify([Number(column_count)])}'>${this.escapeHtml(column_count)} columns</span>
           </div>
         </div>
@@ -597,7 +599,7 @@ export class DataFrameComponentRenderer extends BaseComponentRenderer {
           </table>
           ${hasMoreRows ? `
             <div class="dataframe-truncated">
-              <em data-i18n="web.table.truncated" data-i18n-args='${JSON.stringify([Number(max_rows_displayed), Number(row_count)])}'>Showing ${this.escapeHtml(max_rows_displayed)} of ${this.escapeHtml(row_count)} rows</em>
+              <em data-i18n="${truncated ? 'web.table.preview-shown' : 'web.table.truncated'}" data-i18n-args='${JSON.stringify([Number(max_rows_displayed), Number(row_count)])}'>Showing ${this.escapeHtml(max_rows_displayed)} of ${this.escapeHtml(row_count)} rows</em>
             </div>
           ` : ''}
         </div>
@@ -605,7 +607,7 @@ export class DataFrameComponentRenderer extends BaseComponentRenderer {
     } else {
       tableHTML = `
         <div class="dataframe-empty">
-          <p data-i18n="web.table.empty">No data to display</p>
+          <p data-i18n="${truncated ? 'web.table.preview-empty' : 'web.table.empty'}">No data to display</p>
         </div>
       `;
     }
@@ -1491,7 +1493,7 @@ export class ArtifactComponentRenderer extends BaseComponentRenderer {
       dependenciesHTML += '<script src="https://d3js.org/d3.v7.min.js"></script>\n';
     }
     if (dependencies.includes('plotly')) {
-      dependenciesHTML += '<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>\n';
+      dependenciesHTML += `<script src="https://cdn.plot.ly/plotly-${plotlyVersion}.min.js"></script>\n`;
     }
     if (dependencies.includes('three') || dependencies.includes('threejs')) {
       dependenciesHTML += '<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>\n';

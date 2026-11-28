@@ -51,33 +51,30 @@ export interface ApiClientConfig {
 
 export class DoollaApiClient {
   public readonly baseUrl: string;
-  private sseEndpoint: string;
-  private wsEndpoint: string;
-  private pollEndpoint: string;
+  readonly origin: string;
+  readonly sseEndpoint: string;
+  readonly wsEndpoint: string;
+  readonly pollEndpoint: string;
   private timeout: number;
   private customHeaders: Record<string, string>;
 
   constructor(config: ApiClientConfig = {}) {
     this.baseUrl = config.baseUrl || '';
+    // Capture the API origin when credentials are bound; <base> may change.
+    const documentBase = typeof document === 'undefined' ? undefined : document.baseURI;
+    this.origin = this.baseUrl || documentBase ? new URL(this.baseUrl || documentBase!, documentBase).origin : '';
     this.sseEndpoint = config.sseEndpoint || '/api/doolla/v2/chat_sse';
     this.wsEndpoint = config.wsEndpoint || '/api/doolla/v2/chat_websocket';
     this.pollEndpoint = config.pollEndpoint || '/api/doolla/v2/chat_poll';
     this.timeout = config.timeout || 30000;
-    this.customHeaders = config.customHeaders || {};
-
-    console.log('[DoollaApiClient] Constructor called with config:', config);
-    console.log('[DoollaApiClient] Endpoint configuration:');
-    console.log('  - SSE endpoint:', this.sseEndpoint, config.sseEndpoint ? '(custom)' : '(default)');
-    console.log('  - WS endpoint:', this.wsEndpoint, config.wsEndpoint ? '(custom)' : '(default)');
-    console.log('  - Poll endpoint:', this.pollEndpoint, config.pollEndpoint ? '(custom)' : '(default)');
-    console.log('  - Base URL:', this.baseUrl || '(empty)');
+    this.customHeaders = { ...config.customHeaders };
   }
 
   /**
    * Update custom headers (e.g., for authentication)
    */
   setCustomHeaders(headers: Record<string, string>) {
-    this.customHeaders = headers;
+    this.customHeaders = { ...headers };
   }
 
   /**
@@ -85,6 +82,18 @@ export class DoollaApiClient {
    */
   getCustomHeaders(): Record<string, string> {
     return { ...this.customHeaders };
+  }
+
+  // Explicit endpoints may use a different origin. Only the configured API
+  // origin may receive these headers, including on subsequent redirects.
+  private httpOptions(url: string, accept?: string): RequestInit {
+    const trusted = new URL(url, typeof document === 'undefined' ? undefined : document.baseURI).origin === this.origin;
+    const headers = trusted ? this.customHeaders : {};
+    return {
+      credentials: 'include',
+      redirect: Object.keys(headers).length ? 'error' : 'follow',
+      headers: { 'Content-Type': 'application/json', ...(accept && { Accept: accept }), ...headers },
+    };
   }
 
   /**
@@ -104,12 +113,7 @@ export class DoollaApiClient {
 
     const response = await fetch(url, {
       method: 'POST',
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'text/event-stream',
-        ...this.customHeaders,
-      },
+      ...this.httpOptions(url, 'text/event-stream'),
       body: JSON.stringify(request),
     });
 
@@ -286,11 +290,7 @@ export class DoollaApiClient {
       : `${this.baseUrl}${this.pollEndpoint}`;
     const response = await fetch(url, {
       method: 'POST',
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-        ...this.customHeaders,
-      },
+      ...this.httpOptions(url),
       body: JSON.stringify(request),
     });
 
